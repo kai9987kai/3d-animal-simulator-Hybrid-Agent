@@ -141,6 +141,7 @@
 
     const activeChunks = new Map();
     let entities = [];
+    const pendingBirths = [];
     const foodNodes = []; // Contains type: "plant" or "meat"
 
     // --- Definitions ---
@@ -163,7 +164,7 @@
     function lerp(a, b, t) { return a + (b - a) * t; }
     function lerpAngle(a, b, t) {
       let d = b - a;
-      d = ((d + Math.PI) % (Math.PI * 2)) - Math.PI;
+      d = ((d + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
       return a + d * t;
     }
     function wrapWorld(v) { return v < -WORLD_HALF ? v + (WORLD_HALF*2) : (v > WORLD_HALF ? v - (WORLD_HALF*2) : v); }
@@ -255,7 +256,7 @@
 
       die(cause) {
         scene.remove(this.mesh);
-        this.mesh.geometry.dispose();
+        // Species geometry is shared by every living animal of this species.
         this.mesh.material.dispose();
         
         // Drop meat for predators when dying (if not a bird out of bounds)
@@ -270,7 +271,7 @@
       reproduce() {
         if (this.energy > 130 && this.hunger < 30 && this.thirst < 30 && this.age > 10) {
           this.energy -= 60;
-          entities.push(new Entity(this.def, this));
+          pendingBirths.push(new Entity(this.def, this));
         }
       }
 
@@ -325,7 +326,7 @@
           // Hunt / Forage
           if (this.def.faction === "predator" || this.def.faction === "omnivore") {
             const prey = this.findClosest(entities, actualVision, e => e.def.prey);
-            const meat = this.findClosest(foodNodes, actualVision, f => f.type === "meat");
+            const meat = this.findClosest(foodNodes, actualVision, f => f.type === "meat" && f.amount > 0);
             
             if (meat) {
               desiredYaw = Math.atan2(meat.z - this.z, meat.x - this.x);
@@ -343,7 +344,7 @@
             }
           } 
           if (this.def.faction === "herbivore" || this.def.faction === "omnivore") {
-            const plant = this.findClosest(foodNodes, actualVision, f => f.type === "plant");
+            const plant = this.findClosest(foodNodes, actualVision, f => f.type === "plant" && f.amount > 0);
             if (plant) {
               desiredYaw = Math.atan2(plant.z - this.z, plant.x - this.x);
               if (Math.hypot(plant.x - this.x, plant.z - this.z) < 3.0) {
@@ -421,13 +422,14 @@
 
       build() {
         const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SEGMENTS, CHUNK_SEGMENTS);
+        geo.rotateX(-Math.PI / 2);
         const pos = geo.attributes.position.array;
         const colors = [];
         const ox = this.cx * CHUNK_SIZE; const oz = this.cz * CHUNK_SIZE;
 
         for (let i = 0; i < pos.length; i += 3) {
-          const h = heightAt(ox + pos[i], oz + pos[i + 1]);
-          pos[i + 2] = h;
+          const h = heightAt(ox + pos[i], oz + pos[i + 2]);
+          pos[i + 1] = h;
           
           const c = new THREE.Color();
           if (h < SEA_LEVEL + 1) c.setHSL(0.12, 0.4, 0.45); // Sand
@@ -442,7 +444,6 @@
 
         const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
         this.terrainMesh = new THREE.Mesh(geo, mat);
-        this.terrainMesh.rotation.x = -Math.PI / 2;
         this.terrainMesh.receiveShadow = true;
         this.group.add(this.terrainMesh);
 
@@ -627,8 +628,9 @@
 
     function rebuildWorld() {
       // Clear all
-      entities.forEach(e => { scene.remove(e.mesh); e.mesh.geometry.dispose(); e.mesh.material.dispose(); });
+      [...entities, ...pendingBirths].forEach(e => { scene.remove(e.mesh); e.mesh.material.dispose(); });
       entities = [];
+      pendingBirths.length = 0;
       foodNodes.forEach(n => { scene.remove(n.mesh); n.mesh.geometry.dispose(); n.mesh.material.dispose(); });
       foodNodes.length = 0;
       trackedEntity = null;
@@ -698,6 +700,13 @@
       }
     }
 
+    function stepEntities(dt) {
+      // filter() only visits the array's original length; append births afterwards.
+      entities = entities.filter(e => !e.update(dt));
+      entities.push(...pendingBirths);
+      pendingBirths.length = 0;
+    }
+
     function animate() {
       requestAnimationFrame(animate);
       const dt = Math.min(clock.getDelta(), 0.05);
@@ -710,7 +719,7 @@
       if (Math.random() < 0.01) ensurePopulationMinimums();
 
       // Update Entities & filter dead ones
-      entities = entities.filter(e => !e.update(dt * simSpeed));
+      stepEntities(dt * simSpeed);
 
       // Camera Follow Logic
       if (followType !== "none" && (!trackedEntity || trackedEntity.def.key !== followType)) {
