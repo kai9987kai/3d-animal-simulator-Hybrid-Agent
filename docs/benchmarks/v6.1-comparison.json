@@ -1,0 +1,426 @@
+{
+  "format": "evosim-version-comparison",
+  "date": "2026-09-30",
+  "horizonSeconds": 120,
+  "baselineCommit": "a2ff130376be177f86cac59f845b326da59b3469",
+  "baselineVersion": "6.0",
+  "candidateVersion": "6.1",
+  "initialHashFields": "Initial animal id, type, genes, position and energy; complete vegetation array, JSON in iteration order.",
+  "limits": "Three fixed seeds under default settings. Combined model changes; not a mechanism-isolating experiment or biological validation. Wall-clock timing omitted because host suspension and concurrent workloads affected it. Census is only available in 6.1.",
+  "rows": [
+    {
+      "seed": "evosim-2026",
+      "initialStateSha256": "55d74e1633a04b64014a07a79d4bf4a6d350289d3ff3200b51bdf1898f3f6d31",
+      "baseline": {
+        "seed": "evosim-2026",
+        "mode": "default",
+        "samples": [
+          {
+            "time": 20,
+            "prey": 48,
+            "predators": 8,
+            "plants": 1303,
+            "generation": 0
+          },
+          {
+            "time": 40,
+            "prey": 47,
+            "predators": 8,
+            "plants": 1155,
+            "generation": 1
+          },
+          {
+            "time": 60,
+            "prey": 46,
+            "predators": 1,
+            "plants": 942,
+            "generation": 1
+          },
+          {
+            "time": 80,
+            "prey": 55,
+            "predators": 0,
+            "plants": 810,
+            "generation": 2
+          },
+          {
+            "time": 100,
+            "prey": 59,
+            "predators": 0,
+            "plants": 733,
+            "generation": 2
+          },
+          {
+            "time": 120,
+            "prey": 61,
+            "predators": 0,
+            "plants": 702,
+            "generation": 3
+          }
+        ],
+        "attemptCalls": 0,
+        "kills": 0,
+        "starvation": 45,
+        "submergedStarvation": 26,
+        "version": "6.0",
+        "census": null,
+        "initialHash": "55d74e1633a04b64014a07a79d4bf4a6d350289d3ff3200b51bdf1898f3f6d31"
+      },
+      "candidate": {
+        "seed": "evosim-2026",
+        "mode": "default",
+        "samples": [
+          {
+            "time": 20,
+            "prey": 49,
+            "predators": 8,
+            "plants": 1501,
+            "generation": 0
+          },
+          {
+            "time": 40,
+            "prey": 60,
+            "predators": 7,
+            "plants": 1438,
+            "generation": 1
+          },
+          {
+            "time": 60,
+            "prey": 76,
+            "predators": 7,
+            "plants": 1334,
+            "generation": 1
+          },
+          {
+            "time": 80,
+            "prey": 111,
+            "predators": 4,
+            "plants": 1205,
+            "generation": 2
+          },
+          {
+            "time": 100,
+            "prey": 143,
+            "predators": 4,
+            "plants": 1053,
+            "generation": 2
+          },
+          {
+            "time": 120,
+            "prey": 189,
+            "predators": 3,
+            "plants": 875,
+            "generation": 3
+          }
+        ],
+        "attemptCalls": 13,
+        "kills": 11,
+        "starvation": 16,
+        "submergedStarvation": 0,
+        "version": "6.1",
+        "census": {
+          "births": {
+            "prey": 159,
+            "pred": 0
+          },
+          "introductions": {
+            "prey": 52,
+            "pred": 8
+          },
+          "deaths": {
+            "prey": 22,
+            "pred": 5
+          },
+          "causes": {
+            "predation": 11,
+            "starvation": 16,
+            "disease": 0,
+            "age": 0,
+            "injury": 0
+          },
+          "kills": 11,
+          "failedHunts": 2,
+          "grazes": 729,
+          "regrown": 54
+        },
+        "initialHash": "55d74e1633a04b64014a07a79d4bf4a6d350289d3ff3200b51bdf1898f3f6d31"
+      }
+    },
+    {
+      "seed": "meadow-17",
+      "initialStateSha256": "05a49e4dbc2d26e542c49c3af5afc1f5f6647ecc50adfb4e050bc51b237909e2",
+      "baseline": {
+        "seed": "meadow-17",
+        "mode": "default",
+        "samples": [
+          {
+            "time": 20,
+            "prey": 44,
+            "predators": 8,
+            "plants": 1294,
+            "generation": 0
+          },
+          {
+            "time": 40,
+            "prey": 50,
+            "predators": 7,
+            "plants": 1089,
+            "generation": 1
+          },
+          {
+            "time": 60,
+            "prey": 55,
+            "predators": 3,
+            "plants": 890,
+            "generation": 1
+          },
+          {
+            "time": 80,
+            "prey": 64,
+            "predators": 0,
+            "plants": 742,
+            "generation": 2
+          },
+          {
+            "time": 100,
+            "prey": 66,
+            "predators": 0,
+            "plants": 649,
+            "generation": 2
+          },
+          {
+            "time": 120,
+            "prey": 54,
+            "predators": 0,
+            "plants": 614,
+            "generation": 3
+          }
+        ],
+        "attemptCalls": 5,
+        "kills": 2,
+        "starvation": 46,
+        "submergedStarvation": 19,
+        "version": "6.0",
+        "census": null,
+        "initialHash": "05a49e4dbc2d26e542c49c3af5afc1f5f6647ecc50adfb4e050bc51b237909e2"
+      },
+      "candidate": {
+        "seed": "meadow-17",
+        "mode": "default",
+        "samples": [
+          {
+            "time": 20,
+            "prey": 49,
+            "predators": 8,
+            "plants": 1494,
+            "generation": 0
+          },
+          {
+            "time": 40,
+            "prey": 59,
+            "predators": 8,
+            "plants": 1429,
+            "generation": 1
+          },
+          {
+            "time": 60,
+            "prey": 71,
+            "predators": 6,
+            "plants": 1347,
+            "generation": 1
+          },
+          {
+            "time": 80,
+            "prey": 87,
+            "predators": 7,
+            "plants": 1245,
+            "generation": 2
+          },
+          {
+            "time": 100,
+            "prey": 107,
+            "predators": 4,
+            "plants": 1135,
+            "generation": 2
+          },
+          {
+            "time": 120,
+            "prey": 144,
+            "predators": 4,
+            "plants": 975,
+            "generation": 3
+          }
+        ],
+        "attemptCalls": 26,
+        "kills": 15,
+        "starvation": 20,
+        "submergedStarvation": 0,
+        "version": "6.1",
+        "census": {
+          "births": {
+            "prey": 122,
+            "pred": 1
+          },
+          "introductions": {
+            "prey": 52,
+            "pred": 8
+          },
+          "deaths": {
+            "prey": 30,
+            "pred": 5
+          },
+          "causes": {
+            "predation": 15,
+            "starvation": 20,
+            "disease": 0,
+            "age": 0,
+            "injury": 0
+          },
+          "kills": 15,
+          "failedHunts": 11,
+          "grazes": 615,
+          "regrown": 40
+        },
+        "initialHash": "05a49e4dbc2d26e542c49c3af5afc1f5f6647ecc50adfb4e050bc51b237909e2"
+      }
+    },
+    {
+      "seed": "wetland-42",
+      "initialStateSha256": "872ff0901583c019e3f67f1fc788e6bdf189b6e504c3e215fc8676981fb96b7f",
+      "baseline": {
+        "seed": "wetland-42",
+        "mode": "default",
+        "samples": [
+          {
+            "time": 20,
+            "prey": 48,
+            "predators": 8,
+            "plants": 1296,
+            "generation": 0
+          },
+          {
+            "time": 40,
+            "prey": 57,
+            "predators": 6,
+            "plants": 1134,
+            "generation": 1
+          },
+          {
+            "time": 60,
+            "prey": 58,
+            "predators": 1,
+            "plants": 941,
+            "generation": 1
+          },
+          {
+            "time": 80,
+            "prey": 70,
+            "predators": 0,
+            "plants": 747,
+            "generation": 2
+          },
+          {
+            "time": 100,
+            "prey": 76,
+            "predators": 0,
+            "plants": 581,
+            "generation": 2
+          },
+          {
+            "time": 120,
+            "prey": 72,
+            "predators": 0,
+            "plants": 539,
+            "generation": 3
+          }
+        ],
+        "attemptCalls": 1,
+        "kills": 1,
+        "starvation": 50,
+        "submergedStarvation": 18,
+        "version": "6.0",
+        "census": null,
+        "initialHash": "872ff0901583c019e3f67f1fc788e6bdf189b6e504c3e215fc8676981fb96b7f"
+      },
+      "candidate": {
+        "seed": "wetland-42",
+        "mode": "default",
+        "samples": [
+          {
+            "time": 20,
+            "prey": 47,
+            "predators": 8,
+            "plants": 1496,
+            "generation": 0
+          },
+          {
+            "time": 40,
+            "prey": 60,
+            "predators": 8,
+            "plants": 1434,
+            "generation": 1
+          },
+          {
+            "time": 60,
+            "prey": 74,
+            "predators": 6,
+            "plants": 1338,
+            "generation": 1
+          },
+          {
+            "time": 80,
+            "prey": 93,
+            "predators": 6,
+            "plants": 1234,
+            "generation": 2
+          },
+          {
+            "time": 100,
+            "prey": 115,
+            "predators": 5,
+            "plants": 1125,
+            "generation": 2
+          },
+          {
+            "time": 120,
+            "prey": 137,
+            "predators": 3,
+            "plants": 1003,
+            "generation": 3
+          }
+        ],
+        "attemptCalls": 18,
+        "kills": 11,
+        "starvation": 33,
+        "submergedStarvation": 0,
+        "version": "6.1",
+        "census": {
+          "births": {
+            "prey": 124,
+            "pred": 0
+          },
+          "introductions": {
+            "prey": 52,
+            "pred": 8
+          },
+          "deaths": {
+            "prey": 39,
+            "pred": 5
+          },
+          "causes": {
+            "predation": 11,
+            "starvation": 33,
+            "disease": 0,
+            "age": 0,
+            "injury": 0
+          },
+          "kills": 11,
+          "failedHunts": 7,
+          "grazes": 591,
+          "regrown": 44
+        },
+        "initialHash": "872ff0901583c019e3f67f1fc788e6bdf189b6e504c3e215fc8676981fb96b7f"
+      }
+    }
+  ]
+}

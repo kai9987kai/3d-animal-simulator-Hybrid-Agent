@@ -1,6 +1,6 @@
 'use strict';
 let experimentCancelled=false, lastExperiment=null;
-const actionLabels={corridor:'Restore corridor',refuge:'Seed refuge',geneFlow:'Assisted gene flow',socialOff:'Disable social imitation'};
+const actionLabels={corridor:'Restore corridor',refuge:'Seed refuge',geneFlow:'Assisted gene flow',socialOff:'Disable social imitation',energyOff:'Disable energy-aware behavior',regrowthOff:'Relocate renewed plants'};
 
 function ednaSweep(){
   if(!settings.ednaSensors){notify('Sentinels are disabled');return}
@@ -39,9 +39,16 @@ function updateSentinelPanel(){
   by('sentBias').textContent=e.sampled?(e.bias>0?'+':'')+e.bias:'--';
   by('sentinelList').textContent=e.sampled?`${e.last}\nSample detection coverage: ${Math.round(e.coverageRange[0]*100)}–${Math.round(e.coverageRange[1]*100)}%. Unmatched samples: ${e.falsePositives}.\nCoverage uses hidden local truth for teaching; it is not a statistical confidence interval or a field estimate.`:'Run a survey to compare replicated observations with local model truth.';
 }
-function experimentEndpoint(){return {prey:agents.filter(a=>a.type==='prey').length,predators:agents.filter(a=>a.type==='pred').length,plants:vegetation.active,diversity:diversityIndex(agents),meanEnergy:mean(agents,a=>a.energy)}}
+function experimentEndpoint(){
+  const prey=agents.filter(a=>a.type==='prey'),predators=agents.filter(a=>a.type==='pred');
+  return {prey:prey.length,predators:predators.length,plants:vegetation.active,diversity:diversityIndex(agents),
+    meanEnergy:mean(agents,a=>a.energy),preyEnergy:mean(prey,a=>a.energy),predatorEnergy:mean(predators,a=>a.energy),
+    births:census.births.prey+census.births.pred,deaths:census.deaths.prey+census.deaths.pred,
+    predation:census.causes.predation,starvation:census.causes.starvation,kills:census.kills,failedHunts:census.failedHunts,
+    grazes:census.grazes,regrown:census.regrown,livingLineages:new Set(agents.map(a=>a.founderId)).size};
+}
 function applyExperimentAction(action){
-  if(action==='corridor')restoreCorridor();else if(action==='refuge')addRefuge();else if(action==='geneFlow')assistedGeneFlow();else if(action==='socialOff')settings.socialLearning=false;
+  if(action==='corridor')restoreCorridor();else if(action==='refuge')addRefuge();else if(action==='geneFlow')assistedGeneFlow();else if(action==='socialOff')settings.socialLearning=false;else if(action==='energyOff')settings.energyAware=false;else if(action==='regrowthOff')settings.localRegrowth=false;
 }
 function lockExperimentUI(lock){
   for(const el of document.querySelectorAll('button,input,select')){

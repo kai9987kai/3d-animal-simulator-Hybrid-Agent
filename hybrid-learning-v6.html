@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>EvoSim 6 · Living Systems Laboratory</title>
+<title>EvoSim 6.1 · Living Systems Laboratory</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <script src="vendor/three.min.js"></script>
 <script src="vendor/OrbitControls.js"></script>
@@ -12,7 +12,7 @@
 </head>
 <body>
 <div id="canvasContainer" aria-label="Interactive 3D ecosystem"></div>
-<header class="appHeader"><div class="wordmark"><span class="brandIcon">◈</span> EVOSIM <span class="version">06</span><small>LIVING SYSTEMS LABORATORY</small></div><div class="headerNote">Observe. Intervene. Compare.</div><label for="controlsToggle" class="mobileToggle">Controls ☰</label><a href="docs/research.md" target="_blank">Research notes ↗</a></header>
+<header class="appHeader"><div class="wordmark"><span class="brandIcon">◈</span> EVOSIM <span class="version">06.1</span><small>LIVING SYSTEMS LABORATORY</small></div><div class="headerNote">Observe. Intervene. Compare.</div><label for="controlsToggle" class="mobileToggle">Controls ☰</label><a href="docs/research-v6.1.md" target="_blank">Research notes ↗</a></header>
 <input type="checkbox" id="controlsToggle" class="drawerToggle" aria-label="Show controls">
 <div class="worldCaption"><span class="liveDot"></span> PROCEDURAL ECOSYSTEM <span>Drag to orbit · Scroll to zoom · Click an animal</span></div>
 <div class="leftRail">
@@ -33,8 +33,12 @@
   <div class="row"><span>Phenology mismatch</span><span id="phenologyLabel" class="val">0%</span></div>
   <div class="row"><span>Soil / fear memory</span><span id="fieldLabel" class="val">0 / 0</span></div>
   <div class="row"><span>Survey coverage</span><span id="ednaLabel" class="val">--</span></div>
-  <canvas id="graph" width="252" height="76" class="uiCanvas" style="margin-top:8px"></canvas>
-  <div class="hint">History sampled each simulation second. Green: prey · Coral: predators · Gold: plants · Lime: diversity · Pink: warning index.</div>
+  <label class="inputLabel historyLabel" for="historyMetric">Living history</label>
+  <select id="historyMetric"><option value="population">Animal populations</option><option value="resources">Vegetation resources</option><option value="energy">Mean animal energy</option></select>
+  <canvas id="graph" width="252" height="125" class="uiCanvas" role="img" aria-label="Population history" aria-describedby="historySummary"></canvas>
+  <div id="historyLegend" class="historyLegend"><span class="c-prey">━ Prey</span><span class="c-pred">┄ Predators</span></div>
+  <div id="historySummary" class="historySummary">History sampled each simulation second.</div>
+  <button id="btnObservatory" aria-controls="observatoryPanel" aria-expanded="false">Population &amp; energy census ↗</button>
 </div>
 
 <div id="minimapPanel"><div class="mapLabel">HABITAT ATLAS <span>N ↑</span></div><canvas id="miniCanvas" width="224" height="224" aria-label="Habitat minimap"></canvas></div>
@@ -87,7 +91,7 @@
   </div>
   </details>
   <details open><summary>Paired scenario experiment</summary>
-  <label for="experimentAction" class="inputLabel">Compare baseline with</label><select id="experimentAction"><option value="corridor">Restore corridor</option><option value="refuge">Seed refuge</option><option value="geneFlow">Assisted gene flow</option><option value="socialOff">Disable social imitation</option></select>
+  <label for="experimentAction" class="inputLabel">Compare baseline with</label><select id="experimentAction"><option value="corridor">Restore corridor</option><option value="refuge">Seed refuge</option><option value="geneFlow">Assisted gene flow</option><option value="socialOff">Disable social imitation</option><option value="energyOff">Disable energy-aware behavior</option><option value="regrowthOff">Relocate renewed plants</option></select>
   <label class="row" for="forecastHorizon"><span>Horizon</span><span id="valHorizon" class="val">30s</span></label><input type="range" id="forecastHorizon" min="10" max="120" step="10" value="30">
   <label class="row" for="experimentReplicates"><span>Paired replicates</span><input id="experimentReplicates" type="number" min="2" max="6" value="3"></label>
   <div class="grid2"><button id="btnForecastRun" class="primary">Run comparison</button><button id="btnCancelExperiment" disabled>Cancel</button></div>
@@ -118,6 +122,8 @@
 
   <details>
     <summary>Model switches</summary>
+    <label class="row"><span><input type="checkbox" id="chkEnergyAware" checked> Energy-aware behavior</span></label>
+    <label class="row"><span><input type="checkbox" id="chkLocalRegrowth" checked> Local vegetation renewal</span></label>
     <label class="row"><span><input type="checkbox" id="chkLearning" checked> Adaptive policy learning</span></label>
     <label class="row"><span><input type="checkbox" id="chkCarrying" checked> Local carrying capacity</span></label>
     <label class="row"><span><input type="checkbox" id="chkDefense" checked> Defended prey trade-off</span></label>
@@ -139,6 +145,8 @@
   <div class="row"><span>Energy</span><div class="bar"><div id="selEnergy"></div></div></div>
   <div class="row"><span>Health</span><div class="bar"><div id="selHealth"></div></div></div>
   <div class="row"><span>Age / Gen</span><span id="selAge" class="val">0.0d / 0</span></div>
+  <div class="row"><span>Founder lineage</span><span id="selFounder" class="val">--</span></div>
+  <div class="row"><span>Feeding</span><span id="selFeeding" class="val">--</span></div>
   <div class="row"><span>Eco-type</span><span id="selEco" class="val">A</span></div>
   <div class="row"><span>Learning reward</span><span id="selReward" class="val">0.00</span></div>
   <h3>Genetics</h3>
@@ -151,6 +159,45 @@
   <div class="row"><span>Plasticity</span><span id="genePlasticity" class="val">1.0</span></div>
   <div class="row"><span>Policy</span><span id="genePolicy" class="val">balanced</span></div>
   <canvas id="policyCanvas" width="266" height="42" class="uiCanvas" style="margin-top:6px"></canvas>
+</div>
+
+<div id="observatoryPanel" class="panel" role="region" aria-labelledby="observatoryTitle">
+  <h2 id="observatoryTitle">Living systems census</h2>
+  <p class="observatoryIntro">Follow the flow of life, energy and ancestry in this run.</p>
+  <div class="censusKey"><span>Animal pairs:</span> <span class="c-prey">prey</span> / <span class="c-pred">predators</span></div>
+  <h3>Population accounting</h3>
+  <div class="row"><span>Births</span><span id="obsBirths" class="val">0 / 0</span></div>
+  <div class="row"><span>Introduced founders</span><span id="obsIntroductions" class="val">0 / 0</span></div>
+  <div class="row"><span>Deaths</span><span id="obsDeaths" class="val">0 / 0</span></div>
+  <div id="obsBalance" class="censusBalance">Population accounted for</div>
+  <div class="hint">Introductions + births − deaths = living animals. Initial founders and manual additions count as introductions.</div>
+  <h3>Energy &amp; behaviour now</h3>
+  <div class="row"><span>Mean energy</span><span id="obsEnergy" class="val">0.0 / 0.0</span></div>
+  <div class="row"><span>Resting</span><span id="obsResting" class="val">0 / 0</span></div>
+  <div class="row"><span>Handling a meal</span><span id="obsHandling" class="val">0 / 0</span></div>
+  <div class="row"><span>Living founder lineages</span><span id="obsLineages" class="val">0 / 0</span></div>
+  <div class="row"><span>Highest living generation</span><span id="obsGeneration" class="val">0 / 0</span></div>
+  <h3>Feeding events · cumulative</h3>
+  <div class="row"><span>Successful kills</span><span id="obsKills" class="val">0</span></div>
+  <div class="row"><span>Failed hunt attempts</span><span id="obsFailedHunts" class="val">0</span></div>
+  <div class="row"><span>Hunt success rate</span><span id="obsSuccess" class="val">No attempts</span></div>
+  <div class="row"><span>Plants eaten / renewed</span><span id="obsGrazing" class="val">0 / 0</span></div>
+  <details class="censusDetails" open><summary>Recorded causes of death</summary>
+    <div class="deathCauses">
+      <span>Predation <strong id="obsCause-predation">0</strong></span>
+      <span>Starvation <strong id="obsCause-starvation">0</strong></span>
+      <span>Disease <strong id="obsCause-disease">0</strong></span>
+      <span>Age <strong id="obsCause-age">0</strong></span>
+      <span>Injury <strong id="obsCause-injury">0</strong></span>
+    </div>
+    <div class="hint">Terminal model causes, across both animal types. A recorded cause does not measure every contributing stress.</div>
+  </details>
+  <details class="censusDetails"><summary>Recent animal events</summary>
+    <ol id="censusLedger" class="censusLedger" aria-label="Recent animal events, newest first"></ol>
+    <div id="censusEmpty" class="hint">No animal events recorded.</div>
+    <div class="hint">Newest first · last 80 births, introductions and deaths · T = simulation tick. Totals above cover the complete run.</div>
+  </details>
+  <div class="hint">Founder lineages follow one parent for ancestry tracking. They are not species or genetic diversity estimates. Energy is measured in model units; an empty population has mean 0.</div>
 </div>
 
 <div id="researchPanel" class="panel">
@@ -201,6 +248,7 @@
 <div id="toast" role="status"></div>
 
 <script src="src/lab-core.js"></script>
+<script src="src/observatory.js"></script>
 <script src="src/simulator.js"></script>
 <script src="src/persistence.js"></script>
 <script src="src/experiments.js"></script>

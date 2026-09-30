@@ -1,14 +1,18 @@
 'use strict';
 
-// Schema 6 is a continuation checkpoint, not an abbreviated population report.
+// Schema 7 preserves the EvoSim 6.1 feeding, renewal and census state.
 // Render buffers and camera animation are deliberately excluded from model state.
 const SNAPSHOT_FORMAT = 'evosim-snapshot';
-const SNAPSHOT_SCHEMA = 6;
-const SAVE_KEY = 'evosim6-save';
+const SNAPSHOT_SCHEMA = 7;
+const SAVE_KEY = 'evosim6.1-save';
+const LEGACY_SAVE_KEY = 'evosim6-save';
 const MAX_SNAPSHOT_BYTES = 24 * 1024 * 1024;
 const AGENT_FIELDS = ['id','type','generation','maxSpeed','maxForce','perception','size',
   'energy','health','age','state','targetIdx','memory','sick','immuneMemory','dead','eco',
-  'lastBirth','lastEnergy','lastHealth','reward','actionIdx','genes'];
+  'lastBirth','lastEnergy','lastHealth','reward','actionIdx','genes',
+  'founderId','attackCooldown','handlingTimer','pendingMeal','lastMealTime','deathCause'];
+const NEW_AGENT_FIELDS = ['founderId','attackCooldown','handlingTimer','pendingMeal','lastMealTime','deathCause'];
+const DEATH_CAUSES = ['predation','starvation','disease','age','injury'];
 
 function detachedJSON(value) { return JSON.parse(JSON.stringify(value)); }
 function vectorRecord(value) { return {x:value.x,y:value.y,z:value.z}; }
@@ -18,10 +22,10 @@ function snapshot() {
   return detachedJSON({
     format: SNAPSHOT_FORMAT, schemaVersion: SNAPSHOT_SCHEMA, version: VERSION,
     runSeed, terrainSeed, fixedDt: FIXED_DT, simulationTick, time, dayDuration,
-    nextAgentId, plantCursor, extremeEventClock, accumulator, paused,
+    nextAgentId, plantCursor, extremeEventClock, accumulator, paused, growthAccumulator,
     rng: {simulation:simRng.getState(),sensor:sensorRng.getState(),visual:visualRng.getState()},
     settings, pathogen, refugia, restoredCorridors, soilPulses, fearPulses, sensors,
-    weather: {kind:weatherSystem.kind,timer:weatherSystem.timer}, stats,
+    weather: {kind:weatherSystem.kind,timer:weatherSystem.timer}, stats, census, censusEvents,
     plants: vegetation.data,
     selectedId: followTarget && agents.includes(followTarget) ? followTarget.id : null,
     agents: agents.map(a => {
@@ -35,7 +39,7 @@ function snapshot() {
   });
 }
 
-function validateSnapshot(input) {
+function validateCheckpoint(input,legacy=false) {
   const fail = message => { throw new Error('Invalid snapshot: '+message); };
   let nodeCount=0;
   // Validate before cloning: JSON.stringify would silently replace non-finite values.
@@ -63,8 +67,8 @@ function validateSnapshot(input) {
   const keys=(v,allowed,p)=>{object(v,p);for(const k of Object.keys(v))if(!allowed.includes(k))fail(p+' contains an unsupported field '+k);};
   const vector=(v,p,limit=10000)=>{keys(v,['x','y','z'],p);for(const k of ['x','y','z'])number(v[k],p+'.'+k,-limit,limit);};
   object(s,'snapshot');
-  if(s.format!==SNAPSHOT_FORMAT || s.schemaVersion!==SNAPSHOT_SCHEMA || s.version!=='6.0') {
-    fail('requires a complete EvoSim 6.0 checkpoint; earlier population-only saves cannot be resumed exactly');
+  if(s.format!==SNAPSHOT_FORMAT || s.schemaVersion!==(legacy?6:SNAPSHOT_SCHEMA) || s.version!==(legacy?'6.0':'6.1')) {
+    fail('requires a complete EvoSim 6.1 checkpoint or a complete 6.0 checkpoint for migration; earlier population-only saves cannot be resumed exactly');
   }
   string(s.runSeed,'runSeed',128); string(s.terrainSeed,'terrainSeed',160);
   number(s.fixedDt,'fixedDt',1/60,1/60);
@@ -74,6 +78,7 @@ function validateSnapshot(input) {
   integer(s.nextAgentId,'nextAgentId',1);integer(s.plantCursor,'plantCursor',0,3800);
   number(s.extremeEventClock,'extremeEventClock',0,1e12);
   number(s.accumulator,'accumulator',0,100);boolean(s.paused,'paused');
+  if(!legacy){number(s.growthAccumulator,'growthAccumulator',0,1);if(s.growthAccumulator>=1)fail('growthAccumulator must be less than one');}
   keys(s.rng,['simulation','sensor','visual'],'rng');
   for(const k of ['simulation','sensor','visual'])integer(s.rng[k],'rng.'+k,0,0xffffffff);
   const settingRanges={speed:[0,5],chaos:[.1,2.5],climateStress:[0,1],climateTrend:[-.25,.65],
@@ -81,7 +86,7 @@ function validateSnapshot(input) {
     phenologyDrift:[0,1],sensorNoise:[0,.65],forecastHorizon:[10,120]};
   const settingFlags=['particles','pheromones','heatmap','riskMap','lineage','adaptiveLearning',
     'carryingCapacity','defendedPrey','autoEvents','fearLandscape','nicheConstruction','socialLearning',
-    'ednaSensors','shadows','quality'];
+    'ednaSensors','shadows','quality',...(legacy?[]:['energyAware','localRegrowth'])];
   keys(s.settings,[...Object.keys(settingRanges),...settingFlags,'cameraMode'],'settings');
   for(const [k,[min,max]] of Object.entries(settingRanges))number(s.settings[k],'settings.'+k,min,max);
   integer(s.settings.forecastHorizon,'settings.forecastHorizon',10,120);
@@ -104,6 +109,30 @@ function validateSnapshot(input) {
   keys(s.weather,['kind','timer'],'weather');
   if(!['Clear','Storm','Drought','Heatwave'].includes(s.weather.kind))fail('unknown weather');
   number(s.weather.timer,'weather.timer',-1,100000);
+  if(!legacy){
+    keys(s.census,['births','introductions','deaths','causes','kills','failedHunts','grazes','regrown'],'census');
+    for(const key of ['births','introductions','deaths']){
+      keys(s.census[key],['prey','pred'],'census.'+key);
+      for(const type of ['prey','pred'])integer(s.census[key][type],'census.'+key+'.'+type);
+    }
+    keys(s.census.causes,DEATH_CAUSES,'census.causes');
+    for(const cause of DEATH_CAUSES)integer(s.census.causes[cause],'census.causes.'+cause);
+    for(const key of ['kills','failedHunts','grazes','regrown'])integer(s.census[key],'census.'+key);
+    const recordedDeaths=s.census.deaths.prey+s.census.deaths.pred;
+    const classifiedDeaths=DEATH_CAUSES.reduce((total,cause)=>total+s.census.causes[cause],0);
+    if(!Number.isSafeInteger(recordedDeaths)||!Number.isSafeInteger(classifiedDeaths)||recordedDeaths!==classifiedDeaths)fail('census death causes must account for all recorded deaths');
+    array(s.censusEvents,'censusEvents',80);
+    for(const [i,event] of s.censusEvents.entries()){
+      const p='censusEvents['+i+']';keys(event,['tick','kind','type','cause','id','parentId','founderId'],p);
+      integer(event.tick,p+'.tick',0,s.simulationTick);
+      if(!['birth','introduction','death'].includes(event.kind))fail(p+' has an unknown ledger event kind');
+      if(!['prey','pred'].includes(event.type))fail(p+' has an unknown species');
+      for(const key of ['id','founderId'])integer(event[key],p+'.'+key,1,s.nextAgentId-1);
+      if(event.kind==='birth')integer(event.parentId,p+'.parentId',1,s.nextAgentId-1);
+      if((event.kind==='death'||'cause' in event)&&!DEATH_CAUSES.includes(event.cause))fail(p+' has an unknown death cause');
+      for(const key of ['id','parentId','founderId'])if(key in event)integer(event[key],p+'.'+key,1,s.nextAgentId-1);
+    }
+  }
   object(s.stats,'stats');array(s.stats.history,'stats.history',100000);array(s.stats.events,'stats.events',10000);
   s.stats.events.forEach((v,i)=>string(v,'stats.events['+i+']',2000));
   for(const k of ['speciesCount','diversity','sick','ac1','variance','climateAnomaly','phenologyMismatch'])number(s.stats[k],'stats.'+k);
@@ -137,7 +166,7 @@ function validateSnapshot(input) {
   array(s.agents,'agents',1200);
   const ids=new Set();
   s.agents.forEach((a,i)=>{
-    const p='agents['+i+']';keys(a,[...AGENT_FIELDS,'pos','vel','acc','parent','target'],p);
+    const p='agents['+i+']';keys(a,[...AGENT_FIELDS.filter(key=>!legacy||!NEW_AGENT_FIELDS.includes(key)),'pos','vel','acc','parent','target'],p);
     integer(a.id,p+'.id',1);if(ids.has(a.id))fail('duplicate agent id '+a.id);ids.add(a.id);
     if(!['prey','pred'].includes(a.type))fail(p+' has unknown species');
     integer(a.generation,p+'.generation');
@@ -147,7 +176,13 @@ function validateSnapshot(input) {
     number(a.lastBirth,p+'.lastBirth',0,1e12);integer(a.actionIdx,p+'.actionIdx',0,3);
     integer(a.targetIdx,p+'.targetIdx',-1,Math.max(-1,s.plants.length-1));
     boolean(a.sick,p+'.sick');boolean(a.dead,p+'.dead');string(a.eco,p+'.eco',30);
-    if(!['IDLE','EXPLORE','FLEE','FORAGE','SHELTER','SLEEP','MATE','HUNT','PATROL'].includes(a.state))fail(p+' has unknown behavior');
+    if(!['IDLE','EXPLORE','FLEE','FORAGE','SHELTER','SLEEP','MATE','HUNT','PATROL',...(legacy?[]:['REST','HANDLE'])].includes(a.state))fail(p+' has unknown behavior');
+    if(!legacy){
+      integer(a.founderId,p+'.founderId',1,s.nextAgentId-1);
+      for(const key of ['attackCooldown','handlingTimer','pendingMeal'])number(a[key],p+'.'+key,0,100000);
+      number(a.lastMealTime,p+'.lastMealTime',0,s.time);
+      if(a.deathCause!==null&&!DEATH_CAUSES.includes(a.deathCause))fail(p+' has an unknown death cause');
+    }
     vector(a.pos,p+'.pos');vector(a.vel,p+'.vel');vector(a.acc,p+'.acc');
     const geneFields=['size','speed','sense','immunity','thermal','efficiency','plasticity','defense','boldness','memory'];
     keys(a.genes,[...geneFields,'policy'],p+'.genes');
@@ -159,14 +194,52 @@ function validateSnapshot(input) {
     if(a.target!==null){keys(a.target,['agentId','position'],p+'.target');if(('agentId' in a.target)===('position' in a.target))fail('target must specify one reference or position');if('agentId' in a.target)integer(a.target.agentId,p+'.target.agentId',1);else vector(a.target.position,p+'.target.position');}
   });
   if([...ids].some(id=>id>=s.nextAgentId))fail('nextAgentId must exceed all live ids');
+  if(!legacy)for(const type of ['prey','pred']){
+    const admitted=s.census.introductions[type]+s.census.births[type];
+    // Deaths enter the ledger only when removal completes. Pending dead records
+    // therefore still belong to the population represented by this checkpoint.
+    const represented=s.agents.filter(a=>a.type===type).length;
+    if(!Number.isSafeInteger(admitted)||admitted-s.census.deaths[type]!==represented)fail('census population balance does not match '+type+' agent records');
+  }
   for(const a of s.agents){
     if(a.parent&&a.parent.id>=s.nextAgentId)fail('parent id is beyond nextAgentId');
     if(a.target&&'agentId' in a.target&&!ids.has(a.target.agentId))fail('target references a missing agent');
     const parent=a.parent&&s.agents.find(other=>other.id===a.parent.id);
     if(parent&&parent.generation!==a.parent.generation)fail('parent generation does not match');
+    if(!legacy&&parent&&parent.founderId!==a.founderId)fail('founder does not match recorded parent lineage');
   }
   if(s.selectedId!==null){integer(s.selectedId,'selectedId',1);if(!ids.has(s.selectedId))fail('selected agent does not exist');}
   return s;
+}
+
+function validateSnapshot(input) {
+  if(input?.schemaVersion!==6||input?.version!=='6.0')return validateCheckpoint(input);
+  // Validate the complete old schema before supplying any new-model defaults.
+  const s=validateCheckpoint(input,true),byId=new Map(s.agents.map(a=>[a.id,a]));
+  for(const a of s.agents){
+    let ancestor=a,founderId=a.id;const visited=new Set([a.id]);
+    while(ancestor.parent){
+      founderId=ancestor.parent.id;
+      if(visited.has(founderId)||visited.size>s.agents.length)throw new Error('Invalid snapshot: cyclic parent lineage');
+      visited.add(founderId);ancestor=byId.get(founderId);if(!ancestor)break;
+    }
+    Object.assign(a,{founderId,attackCooldown:0,handlingTimer:0,pendingMeal:0,lastMealTime:0,deathCause:null});
+  }
+  s.schemaVersion=SNAPSHOT_SCHEMA;s.version='6.1';s.growthAccumulator=0;
+  s.settings.energyAware=true;s.settings.localRegrowth=true;
+  s.census={births:{prey:0,pred:0},introductions:{prey:0,pred:0},deaths:{prey:0,pred:0},
+    causes:Object.fromEntries(DEATH_CAUSES.map(cause=>[cause,0])),kills:0,failedHunts:0,grazes:0,regrown:0};
+  for(const a of s.agents)s.census.introductions[a.type]++;
+  s.censusEvents=[];
+  s.stats.events.unshift('Imported EvoSim 6.0 state under 6.1 rules; not an exact 6.0 continuation. Census starts at import; founder IDs use oldest retained ancestors.');
+  s.stats.events=s.stats.events.slice(0,34);
+  return validateCheckpoint(s);
+}
+
+function checkpointRestoreNotice(input,verb) {
+  return input?.schemaVersion===6&&input?.version==='6.0'
+    ? 'EvoSim 6.0 state imported under 6.1 rules; this is not an exact 6.0 continuation.'
+    : 'Checkpoint '+verb;
 }
 
 function restoreSnapshot(input) {
@@ -200,7 +273,8 @@ function restoreSnapshot(input) {
     a.target=data.target?('agentId' in data.target?byId.get(data.target.agentId).pos:
       new THREE.Vector3(data.target.position.x,data.target.position.y,data.target.position.z)):null;
   }
-  stats=s.stats;plantCursor=s.plantCursor;extremeEventClock=s.extremeEventClock;
+  stats=s.stats;plantCursor=s.plantCursor;extremeEventClock=s.extremeEventClock;growthAccumulator=s.growthAccumulator;
+  census=s.census;censusEvents=s.censusEvents.map(event=>Object.freeze(event));
   weatherSystem.kind=s.weather.kind;weatherSystem.timer=s.weather.timer;
   nextAgentId=s.nextAgentId;accumulator=s.accumulator;paused=s.paused;uiTick=0;
   followTarget=s.selectedId===null?null:byId.get(s.selectedId);selectedId=s.selectedId;
@@ -222,20 +296,20 @@ function saveState() {
 }
 function loadState() {
   try {
-    const raw=localStorage.getItem(SAVE_KEY);
-    if(!raw){notify('No EvoSim 6 checkpoint found. Older saves do not contain complete continuation state.');return;}
+    const raw=localStorage.getItem(SAVE_KEY)||localStorage.getItem(LEGACY_SAVE_KEY);
+    if(!raw){notify('No complete EvoSim 6.1 or 6.0 checkpoint found.');return;}
     if(raw.length>MAX_SNAPSHOT_BYTES)throw new Error('checkpoint exceeds 24 MB');
-    restoreSnapshot(JSON.parse(raw));notify('Checkpoint restored');
+    const input=JSON.parse(raw);restoreSnapshot(input);notify(checkpointRestoreNotice(input,'restored'));
   } catch(error){notify('Load failed: '+error.message);}
 }
 async function importStateFile(file) {
   if(!file)return;
   try {if(file.size>MAX_SNAPSHOT_BYTES)throw new Error('checkpoint exceeds 24 MB');
-    restoreSnapshot(JSON.parse(await file.text()));notify('Checkpoint imported');
+    const input=JSON.parse(await file.text());restoreSnapshot(input);notify(checkpointRestoreNotice(input,'imported'));
   } catch(error){notify('Import failed: '+error.message);}
 }
 function exportJSON() {
-  try {const s=snapshot();validateSnapshot(s);downloadBlob(JSON.stringify(s,null,2),'evosim6-checkpoint.json','application/json');notify('Complete checkpoint exported');}
+  try {const s=snapshot();validateSnapshot(s);downloadBlob(JSON.stringify(s,null,2),'evosim6.1-checkpoint.json','application/json');notify('Complete checkpoint exported');}
   catch(error){notify('Export failed: '+error.message);}
 }
 

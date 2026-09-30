@@ -18,9 +18,9 @@ async function check(name,fn){await fn();checks.push(name);console.log('PASS '+n
   page.setDefaultTimeout(30000);
   page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text())});
   await page.goto(base);await page.waitForFunction(()=>typeof window.render_game_to_text==='function'&&typeof renderer!=='undefined'&&!!vegetation);
-  await page.evaluate(()=>{setPaused(true);settings.shadows=false;renderer.shadowMap.enabled=false;syncUI()});
+  await page.evaluate(()=>{window.requestAnimationFrame=()=>0;setPaused(true);settings.shadows=false;renderer.shadowMap.enabled=false;syncUI()});
   await check('app loads offline dependencies and renders the 3D world',async()=>{
-    const state=JSON.parse(await page.evaluate(()=>render_game_to_text()));assert.equal(state.version,'6.0');assert.ok(state.prey>0);assert.ok(state.plants>1000);
+    const state=JSON.parse(await page.evaluate(()=>render_game_to_text()));assert.equal(state.version,'6.1');assert.ok(state.prey>0);assert.ok(state.plants>1000);
     assert.equal(await page.locator('#canvasContainer canvas').count(),1);
     assert.deepEqual(await page.evaluate(()=>performance.getEntriesByType('resource').filter(r=>!r.name.startsWith(location.origin)).map(r=>r.name)),[]);
   });
@@ -65,6 +65,64 @@ async function check(name,fn){await fn();checks.push(name);console.log('PASS '+n
   });
   await check('one dead prey cannot feed two predators',async()=>{
     const result=await page.evaluate(()=>{const saved=snapshot(),prey=agents.find(a=>a.type==='prey'),pred=agents.find(a=>a.type==='pred');prey.dead=true;const energy=pred.energy;pred.attackPrey(prey);const okay=pred.energy===energy;restoreSnapshot(saved);return okay});assert.ok(result);
+  });
+  await check('failed hunts have a cooldown instead of charging every simulation tick',async()=>{
+    const result=await page.evaluate(()=>{
+      const saved=snapshot(),pred=agents.find(a=>a.type==='pred'),prey=agents.find(a=>a.type==='prey'),next=simRng.next;
+      try{settings.energyAware=true;simRng.next=()=>.999;pred.attackCooldown=0;pred.handlingTimer=0;pred.energy=100;
+        const count=census.failedHunts;pred.attackPrey(prey);const energy=pred.energy;pred.attackPrey(prey);
+        return pred.energy===energy&&energy<100&&pred.attackCooldown>0&&census.failedHunts===count+1;
+      }finally{simRng.next=next;restoreSnapshot(saved)}
+    });assert.ok(result);
+  });
+  await check('successful hunts require feeding time and replay correctly during handling',async()=>{
+    const result=await page.evaluate(()=>{
+      const saved=snapshot(),pred=agents.find(a=>a.type==='pred'),prey=agents.find(a=>a.type==='prey'),next=simRng.next;
+      try{settings.energyAware=true;settings.defendedPrey=false;settings.diseasePressure=0;pred.energy=40;pred.attackCooldown=0;pred.handlingTimer=0;simRng.next=()=>0;
+        pred.attackPrey(prey);const gradual=pred.energy===40&&pred.pendingMeal===62&&pred.handlingTimer>0&&prey.deathCause==='predation';simRng.next=next;
+        simulationStep();const checkpoint=snapshot();advanceSimulation(.5);const expected=snapshot();restoreSnapshot(checkpoint);advanceSimulation(.5);
+        return {gradual,replay:JSON.stringify(expected)===JSON.stringify(snapshot()),feeding:agents.find(a=>a.id===pred.id)?.state==='HANDLE'};
+      }finally{simRng.next=next;restoreSnapshot(saved)}
+    });assert.deepEqual(result,{gradual:true,replay:true,feeding:true});
+  });
+  await check('rest uses energy and shoreline motion cannot enter deep water',async()=>{
+    const result=await page.evaluate(()=>{
+      const saved=snapshot(),a=agents[0],height=getTerrainHeight;
+      try{getTerrainHeight=(x,z)=>x>0?-2:1;settings.fearLandscape=false;a.pos.set(-.001,1,0);a.vel.set(3,0,0);a.state='REST';a.target=null;a.energy=100;
+        a.steerAndMove(1/60,[],seasonInfo(),1,.8);
+        const restCosts=a.energy<100,land=a.pos.x<=0;
+        a.pos.set(2,-2,0);getTerrainHeight=(x,z)=>x<2?-1.5:-2;a.vel.set(-1,0,0);a.state='EXPLORE';a.steerAndMove(1/60,[],seasonInfo(),-2,.8);
+        return {restCosts,land,recovery:a.pos.x<2};
+      }finally{getTerrainHeight=height;restoreSnapshot(saved)}
+    });assert.deepEqual(result,{restCosts:true,land:true,recovery:true});
+  });
+  await check('failed births preserve parent energy and successful births inherit founder identity',async()=>{
+    const result=await page.evaluate(()=>{
+      const saved=snapshot(),mother=agents.find(a=>a.type==='prey'),father=agents.filter(a=>a.type==='prey')[1],height=getTerrainHeight;
+      try{const energy=[mother.energy,father.energy],cooldown=[mother.lastBirth,father.lastBirth];getTerrainHeight=()=>-10;mother.reproduce(father);
+        const unchanged=JSON.stringify(energy)===JSON.stringify([mother.energy,father.energy])&&JSON.stringify(cooldown)===JSON.stringify([mother.lastBirth,father.lastBirth]);
+        getTerrainHeight=height;mother.reproduce(father);const child=agents[agents.length-1];
+        return {unchanged,lineage:child.parent===mother&&child.founderId===mother.founderId&&child.generation===mother.generation+1};
+      }finally{getTerrainHeight=height;restoreSnapshot(saved)}
+    });assert.deepEqual(result,{unchanged:true,lineage:true});
+  });
+  await check('local renewal visits every patch even when the patch count is divisible by 17',async()=>{
+    const result=await page.evaluate(()=>{
+      const saved=snapshot(),next=simRng.next;
+      try{settings.localRegrowth=true;vegetation.data=vegetation.data.slice(0,17);vegetation.data.forEach(p=>p.active=false);vegetation.active=0;plantCursor=0;growthAccumulator=0;rebuildPlantIndex();
+        const positions=JSON.stringify(vegetation.data.map(p=>[p.x,p.z,p.rotation,p.scale]));simRng.next=()=>0;regrowPlants(1);
+        return {active:vegetation.active,local:positions===JSON.stringify(vegetation.data.map(p=>[p.x,p.z,p.rotation,p.scale]))};
+      }finally{simRng.next=next;restoreSnapshot(saved)}
+    });assert.deepEqual(result,{active:17,local:true});
+  });
+  await check('census accounts for population and remains detached in snapshots',async()=>{
+    const result=await page.evaluate(()=>{
+      restartRun('census-balance');advanceSimulation(10);
+      const balanced=['prey','pred'].every(type=>census.introductions[type]+census.births[type]-census.deaths[type]===agents.filter(a=>a.type===type).length);
+      const causes=Object.values(census.causes).reduce((a,b)=>a+b,0)===census.deaths.prey+census.deaths.pred;
+      const s=snapshot(),prior=census.births.prey;s.census.births.prey++;
+      return balanced&&causes&&census.births.prey===prior&&censusEvents.length<=80;
+    });assert.ok(result);
   });
   await check('history samples simulation seconds, never UI redraws',async()=>{
     const result=await page.evaluate(()=>{restartRun('history');for(let i=0;i<10;i++)updateUI(1/60);const before=stats.history.length;advanceSimulation(3);return {before,after:stats.history.length,days:stats.history.map(h=>h.day)}});assert.equal(result.before,1);assert.equal(result.after,4);assert.equal(result.days[3],3/120);

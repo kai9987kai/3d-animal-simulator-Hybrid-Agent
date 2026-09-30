@@ -29,3 +29,18 @@ Clean main at ed41e6e. README points at a nonexistent file. Simulation and rende
 - Current source remains uncommitted; publishing was not requested.
 
 Final full experiment JSON export verified in Chromium: exported bundle retains both paired rows and schema6 starting checkpoint. Local server remains on 127.0.0.1:8766.
+
+## 30 September 2026: EvoSim 6.1 continuation
+
+User asked to innovate and advance further, then to continue. The prior work had been committed at a2ff130; that commit was archived separately as the 6.0 comparison baseline.
+
+- Added energy-aware satiation/rest, finite feeding and attack cooldowns; shelter keeps positive metabolism. Successful offspring creation precedes charging parents.
+- Added heading-relative exploration and shoreline navigation that rejects deep-water entry and permits uphill recovery for previously submerged imports.
+- Renewed vegetation stays at its patch by default; elapsed-time budgets and sequential traversal avoid the old stride-17 coverage defect. Added relocation and energy behavior ablations.
+- Added census/causes/feeding/founder dashboard, population/resource/energy history views with dynamic scales, inspector feeding/lineage details, and richer history/experiment exports.
+- Added indexed environmental pulse queries and render-once-per-frame animal synchronization.
+- Schema7/version6.1 preserves all new state. Complete 6.0 imports explicitly migrate to new rules and new census history. Review added strict population balance and complete ledger-event validation before restoration.
+- Four recent primary studies plus a foundational movement study are documented in docs/research-v6.1.md with model boundaries.
+- Final validation: 28 unit tests, 25 core browser checks, 8 observatory browser checks, syntax checks and git diff --check passed. Skill-client WebGL and desktop/mobile census screenshots inspected.
+- Three matched initial-state hashes, 120 seconds each: submerged starvation 26/19/18 -> 0/0/0; predator survivors 0/0/0 -> 3/4/3. Full receipt and limits in docs/benchmarks/v6.1-comparison.json and docs/validation.md. Timing excluded because host suspension/concurrent workloads affected elapsed wall time.
+- Current changes are local; publication/commit was not requested. No remaining required task work. Future research: longer independent-seed runs, movement distributions, fitted resource/energy budgets, and full two-parent pedigree if useful; current founder label is single-parent ancestry.

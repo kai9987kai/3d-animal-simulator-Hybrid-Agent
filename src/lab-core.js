@@ -61,7 +61,32 @@
       return out.sort((a,b) => a-b);
     }
   }
-  const api = {seedHash, createRng, crossGenes, summarize, PointIndex, traits};
+  function consumeMeal(energy, pending, remaining, dt, capacity=135) {
+    const portion = remaining > 0 ? Math.min(pending,pending*dt/remaining) : pending;
+    return {energy:Math.min(capacity,energy+portion),pending:Math.max(0,pending-portion),remaining:Math.max(0,remaining-dt)};
+  }
+  function renewalBudget(accumulator, dt, attemptsPerSecond) {
+    const total=accumulator+Math.max(0,dt)*Math.max(0,attemptsPerSecond);
+    const attempts=Math.floor(total+1e-10);
+    return {attempts,remainder:Math.max(0,total-attempts)};
+  }
+  const pulseCache=new WeakMap();
+  function samplePulseField(list,x,z,scale=1) {
+    let cache=pulseCache.get(list);
+    if(!cache||cache.count!==list.length){
+      cache={index:new PointIndex(16),radius:0,count:list.length};
+      list.forEach((p,i)=>{cache.index.insert(i,p.x,p.z);cache.radius=Math.max(cache.radius,p.radius||10)});
+      pulseCache.set(list,cache);
+    }
+    let total=0;
+    for(const i of cache.index.query(x,z,cache.radius)){
+      const p=list[i],r=p.radius||10,d=Math.hypot(x-p.x,z-p.z);
+      if(d<r)total+=p.strength*(1-d/r)*scale;
+    }
+    return Math.max(0,Math.min(2,total));
+  }
+  const invalidatePulseField=list=>pulseCache.delete(list);
+  const api = {seedHash, createRng, crossGenes, summarize, PointIndex, traits, consumeMeal, renewalBudget, samplePulseField, invalidatePulseField};
   root.EvoLab = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

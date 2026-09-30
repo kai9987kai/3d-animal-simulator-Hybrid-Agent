@@ -7,7 +7,7 @@ function restartRun(seed){
   seed=String(seed).trim().slice(0,120)||'evosim-2026';
   unfollow();for(const a of agents)a.dispose();agents=[];
   runSeed=seed;terrainSeed=seed+':terrain';simRng=EvoLab.createRng(seed+':ecology');sensorRng=EvoLab.createRng(seed+':sensors');visualRng=EvoLab.createRng(seed+':visuals');
-  simulationTick=0;time=0;accumulator=0;plantCursor=0;nextAgentId=1;extremeEventClock=0;phenologyCache={prey:1,pred:1};
+  simulationTick=0;time=0;accumulator=0;plantCursor=0;nextAgentId=1;extremeEventClock=0;growthAccumulator=0;census=EvoObservatory.createCensus();censusEvents=[];phenologyCache={prey:1,pred:1};
   refugia=[];restoredCorridors=[];soilPulses=[];fearPulses=[];initSensors();
   pathogen={id:1,virulence:.55,transmission:.5,immuneEscape:.35};stats=JSON.parse(JSON.stringify(freshStats));
   weatherSystem.kind='Clear';weatherSystem.timer=0;pheromones.items=[];
@@ -17,6 +17,7 @@ function restartRun(seed){
   sampleHistory();syncUI();setPaused(true);updateUI(1/60);renderFrame(0);notify('Seeded world restarted');
 }
 function setupLabUI(){
+  setupObservatoryUI();
   const by=id=>document.getElementById(id);
   by('btnRestart').onclick=()=>restartRun(by('runSeed').value);
   by('btnStep').onclick=()=>{if(experimentRunning)return;setPaused(true);simulationStep();updateUI(1/60);renderFrame(0)};
@@ -46,7 +47,7 @@ window.render_game_to_text=()=>JSON.stringify({version:VERSION,seed:runSeed,tick
   coordinates:'World x east / z south, origin at center; y elevation. World bounds -75..75.',
   prey:agents.filter(a=>a.type==='prey').length,predators:agents.filter(a=>a.type==='pred').length,plants:vegetation?.active,
   weather:weatherSystem?.kind,refuges:refugia.length,corridors:restoredCorridors.length,historySamples:stats.history.length,
-  selected:selectedId,sensor:stats.edna,agents:agents.slice(0,12).map(a=>({id:a.id,type:a.type,state:a.state,x:+a.pos.x.toFixed(2),z:+a.pos.z.toFixed(2),energy:+a.energy.toFixed(1)}))});
+  selected:selectedId,census,sensor:stats.edna,agents:agents.slice(0,12).map(a=>({id:a.id,type:a.type,state:a.state,x:+a.pos.x.toFixed(2),z:+a.pos.z.toFixed(2),energy:+a.energy.toFixed(1)}))});
 try { init(); } catch(error) {
   console.error(error);
   document.getElementById('runStatus').textContent='Unable to start: '+error.message;

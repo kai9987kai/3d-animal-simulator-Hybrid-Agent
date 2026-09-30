@@ -1,12 +1,13 @@
 
 'use strict';
 
-const VERSION='6.0';
+const VERSION='6.1';
 const FIXED_DT=1/60, MAX_AGENTS=1200;
 let runSeed='evosim-2026', terrainSeed=runSeed+':terrain';
 let simRng=EvoLab.createRng(runSeed+':ecology'), sensorRng=EvoLab.createRng(runSeed+':sensors'), visualRng=EvoLab.createRng(runSeed+':visuals');
 let simulationTick=0, accumulator=0, nextAgentId=1, experimentRunning=false;
-let phenologyCache={prey:1,pred:1};
+let phenologyCache={prey:1,pred:1},growthAccumulator=0;
+let census=EvoObservatory.createCensus(),censusEvents=[];
 const plantGrid=new EvoLab.PointIndex(8);
 const animalParts={head:new THREE.SphereGeometry(1,7,5),leg:new THREE.BoxGeometry(1,1,1),ear:new THREE.ConeGeometry(1,1,4)};
 function addAnimalDetails(body,size,type,material){
@@ -37,7 +38,7 @@ let pathogen={id:1,virulence:.55,transmission:.5,immuneEscape:.35};
 let settings={
   speed:1,chaos:1,climateStress:.35,climateTrend:.10,mutation:.05,diseasePressure:.2,fragmentation:.2,learningRate:.25,phenologyDrift:.20,sensorNoise:.18,forecastHorizon:30,
   particles:true,pheromones:true,heatmap:false,riskMap:false,lineage:false,cameraMode:'orbit',shadows:true,quality:false,
-  adaptiveLearning:true,carryingCapacity:true,defendedPrey:true,autoEvents:true,fearLandscape:true,nicheConstruction:true,socialLearning:true,ednaSensors:true
+  adaptiveLearning:true,carryingCapacity:true,defendedPrey:true,autoEvents:true,fearLandscape:true,nicheConstruction:true,socialLearning:true,ednaSensors:true,energyAware:true,localRegrowth:true
 };
 let stats={history:[],events:[],speciesCount:0,diversity:0,weather:'Clear',season:'Spring',sick:0,ews:'Stable',ac1:0,variance:0,climateAnomaly:0,phenologyMismatch:0,edna:{observed:0,true:0,confidence:0,bias:0,last:'No sweep yet'},forecast:{risk:0,action:'Run forecast',notes:'No forecast yet'}};
 const dummy=new THREE.Object3D();
@@ -63,11 +64,11 @@ function corridorAt(x,z){let bonus=0; for(const c of restoredCorridors){const d=
 function distanceToSegment(px,pz,x1,z1,x2,z2){const vx=x2-x1,vz=z2-z1,wx=px-x1,wz=pz-z1,c1=vx*wx+vz*wz,c2=vx*vx+vz*vz,t=clamp(c1/Math.max(.0001,c2),0,1),x=x1+t*vx,z=z1+t*vz;return Math.hypot(px-x,pz-z)}
 function habitatConnectivity(x,z){const frag=settings.fragmentation; const corridor=corridorAt(x,z); const n=simplex?simplex.noise2D(x*.045+710,z*.045-330):0; const road=Math.abs(simplex?simplex.noise2D(x*.015-90,z*.015+80):0); let pass=clamp(1-frag*(road>.62?.85:.32)-frag*clamp(n*.5+.5,0,1)*.32+corridor*.75,0,1); return pass}
 function habitatRisk(x,z,h){const m=moistureAt(x,z,h), f=fertilityAt(x,z,h,m), conn=habitatConnectivity(x,z), fear=settings.fearLandscape?fearAt(x,z)*.12:0; return clamp((1-f)*.55+(1-conn)*.35+dynamicClimateStress()*.22+fear,0,1)}
-function radialPulseAt(list,x,z,scale=1){let v=0; for(const p of list){const r=p.radius||10,d=Math.hypot(x-p.x,z-p.z); if(d<r)v+=p.strength*(1-d/r)*scale} return clamp(v,0,2)}
+function radialPulseAt(list,x,z,scale=1){return EvoLab.samplePulseField(list,x,z,scale)}
 function soilAt(x,z){return settings.nicheConstruction?radialPulseAt(soilPulses,x,z,1):0}
 function fearAt(x,z){return settings.fearLandscape?radialPulseAt(fearPulses,x,z,1):0}
-function depositSoil(pos,amount=.25,radius=8){if(!settings.nicheConstruction)return; soilPulses.push({x:pos.x,z:pos.z,strength:amount,radius,life:1}); if(soilPulses.length>360)soilPulses.shift()}
-function depositFear(pos,amount=.55,radius=13){if(!settings.fearLandscape)return; fearPulses.push({x:pos.x,z:pos.z,strength:amount,radius,life:1}); if(fearPulses.length>420)fearPulses.shift()}
+function depositSoil(pos,amount=.25,radius=8){if(!settings.nicheConstruction)return; soilPulses.push({x:pos.x,z:pos.z,strength:amount,radius,life:1}); if(soilPulses.length>360)soilPulses.shift();EvoLab.invalidatePulseField(soilPulses)}
+function depositFear(pos,amount=.55,radius=13){if(!settings.fearLandscape)return; fearPulses.push({x:pos.x,z:pos.z,strength:amount,radius,life:1}); if(fearPulses.length>420)fearPulses.shift();EvoLab.invalidatePulseField(fearPulses)}
 function updateEcoFields(dt){for(const p of soilPulses){p.life-=dt*.018;p.strength*=1-dt*.010} for(const p of fearPulses){p.life-=dt*.060;p.strength*=1-dt*.040} soilPulses=soilPulses.filter(p=>p.life>0&&p.strength>.015); fearPulses=fearPulses.filter(p=>p.life>0&&p.strength>.015)}
 function phenologyMatch(type,si){const seasonal=[.95,.82,.58,.36][si.idx], drift=dynamicClimateStress()*settings.phenologyDrift, trait=phenologyCache[type]; return clamp(seasonal + (trait-1)*.22 - drift*(type==='pred'?.45:.35), .12, 1.08)}
 function initSensors(){sensors=[{x:-42,z:-34,radius:27,last:0},{x:38,z:-26,radius:27,last:0},{x:0,z:42,radius:30,last:0}]}
@@ -147,9 +148,20 @@ function spawnPlant(index=null){
 }
 function hidePlant(i){dummy.scale.set(0,0,0);dummy.position.set(0,-999,0);dummy.updateMatrix();vegetation.mesh.setMatrixAt(i,dummy.matrix);vegetation.mesh.instanceMatrix.needsUpdate=true}
 function regrowPlants(dt){
-  const s=seasonInfo(); let attempts=Math.ceil(2*s.growth*(1-dynamicClimateStress()*.45));
-  if(stats.weather==='Drought'||stats.weather==='Heatwave')attempts=Math.max(0,attempts-1); if(stats.weather==='Storm')attempts+=1;
-  for(let a=0;a<attempts;a++){plantCursor=(plantCursor+17)%Math.max(1,vegetation.data.length); const p=vegetation.data[plantCursor]; if(p&&!p.active && random()<0.025*s.growth*(1-dynamicClimateStress()*.5))spawnPlant(plantCursor)}
+  if(!vegetation.data.length)return;
+  const season=seasonInfo();let rate=120*season.growth*Math.max(0,1-dynamicClimateStress()*.45);
+  if(stats.weather==='Drought'||stats.weather==='Heatwave')rate*=.5;if(stats.weather==='Storm')rate*=1.25;
+  const budget=EvoLab.renewalBudget(growthAccumulator,dt,rate);growthAccumulator=budget.remainder;
+  for(let a=0;a<budget.attempts;a++){
+    plantCursor=(plantCursor+1)%vegetation.data.length;const p=vegetation.data[plantCursor];
+    if(!p||p.active||random()>=.025*season.growth*Math.max(0,1-dynamicClimateStress()*.5))continue;
+    if(settings.localRegrowth){
+      const h=getTerrainHeight(p.x,p.z),m=moistureAt(p.x,p.z,h),f=fertilityAt(p.x,p.z,h,m);
+      if(h<-.75||h>7.5||f<=0)continue;
+      p.active=true;p.fertility=f;p.energy=24*p.scale*(.68+f);p.age=0;vegetation.active++;plantGrid.insert(plantCursor,p.x,p.z);if(!experimentRunning)drawPlant(plantCursor);
+      recordCensus({kind:'regrow'});
+    }else if(spawnPlant(plantCursor))recordCensus({kind:'regrow'});
+  }
 }
 function makeMiniTerrainCache(){
   const size=224,can=document.createElement('canvas'),ctx=can.getContext('2d'); can.width=can.height=size; const img=ctx.createImageData(size,size),half=WORLD_SIZE/2;
@@ -177,12 +189,12 @@ function spawnAgent(type,x,z,genes=null,parent=null){if(agents.length>=MAX_AGENT
     for(let i=0;i<24;i++){const px=clamp(x+rnd(-12,12),-70,70),pz=clamp(z+rnd(-12,12),-70,70);if(habitable(px,pz)){x=px;z=pz;found=true;break}}
     if(!found){const land=vegetation.data.filter(p=>habitable(p.x,p.z));if(!land.length)return null;const p=land[Math.floor(random()*land.length)];x=p.x;z=p.z}
   }
-  const a=new Agent(type,x,z,genes,parent); agents.push(a); return a}
+  const a=new Agent(type,x,z,genes,parent); agents.push(a);recordCensus({kind:parent?'birth':'introduction',type,id:a.id,founderId:a.founderId,...(parent?{parentId:parent.id}:{})});return a}
 function agentColor(type,genes,sick=false){if(sick)return 0xb86cff; if(type==='prey'){const base=new THREE.Color(COLORS.prey),def=new THREE.Color(0xe6ff55); return base.lerp(def,settings.defendedPrey?clamp(genes.defense||0,0,1)*.75:0).getHex()} return COLORS.pred}
 
 class Agent{
   constructor(type,x,z,genes=null,parent=null){
-    this.id=nextAgentId++; this.type=type; this.parent=parent||null; this.generation=parent?parent.generation+1:0; this.pos=new THREE.Vector3(x,getTerrainHeight(x,z),z); this.vel=new THREE.Vector3(rnd(-1,1),0,rnd(-1,1)).normalize(); this.acc=new THREE.Vector3(); this.genes=genes||randomGenes(type);
+    this.id=nextAgentId++;this.founderId=parent?.founderId||this.id;this.attackCooldown=0;this.handlingTimer=0;this.pendingMeal=0;this.lastMealTime=0;this.deathCause=null; this.type=type; this.parent=parent||null; this.generation=parent?parent.generation+1:0; this.pos=new THREE.Vector3(x,getTerrainHeight(x,z),z); this.vel=new THREE.Vector3(rnd(-1,1),0,rnd(-1,1)).normalize(); this.acc=new THREE.Vector3(); this.genes=genes||randomGenes(type);
     this.maxSpeed=(type==='prey'?3.45:4.05)*this.genes.speed*(1-(type==='prey'&&settings.defendedPrey?(this.genes.defense||0)*.12:0)); this.maxForce=6.3; this.perception=(type==='prey'?16:26)*this.genes.sense; this.size=this.genes.size; this.energy=rnd(82,105); this.health=100; this.age=0; this.state='IDLE'; this.target=null; this.targetIdx=-1; this.memory=[]; this.sick=false; this.immuneMemory=0; this.dead=false; this.eco=ecoType(this.genes,type); this.lastBirth=0; this.lastEnergy=this.energy; this.lastHealth=this.health; this.reward=0; this.actionIdx=3;
     const col=agentColor(type,this.genes,false); const geo=new THREE.BoxGeometry((type==='prey'?.42:.55)*this.size,.45*this.size,(type==='prey'?.78:.95)*this.size);
     const mat=new THREE.MeshStandardMaterial({color:col,roughness:.38,metalness:.02}); this.mesh=new THREE.Mesh(geo,mat); this.mesh.castShadow=true; this.mesh.userData={agent:this}; addAnimalDetails(this.mesh,this.size,type,mat); this.mesh.position.copy(this.pos);this.mesh.position.y+=.42*this.size;this.mesh.lookAt(this.pos.clone().add(this.vel));scene.add(this.mesh);
@@ -191,14 +203,17 @@ class Agent{
   addLabel(){if(this.label)return; const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d'); canvas.width=160;canvas.height=34;ctx.fillStyle='rgba(0,0,0,.48)';ctx.fillRect(0,0,160,34);ctx.fillStyle='#fff';ctx.font='18px Segoe UI';ctx.textAlign='center';ctx.fillText(this.eco+' G'+this.generation,80,22); const tex=new THREE.CanvasTexture(canvas); const spr=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true})); spr.scale.set(6.2,1.32,1); this.label=spr; scene.add(spr)}
   removeLabel(){if(this.label){scene.remove(this.label);this.label.material.map.dispose();this.label.material.dispose();this.label=null}}
   update(dt,neighbors,dayRatio){
+    this.attackCooldown=Math.max(0,this.attackCooldown-dt);
     this.age+=dt/dayDuration; if(settings.lineage&&!this.label&&!experimentRunning)this.addLabel(); if(!settings.lineage&&this.label)this.removeLabel(); this.memory.forEach(m=>m.ttl-=dt); this.memory=this.memory.filter(m=>m.ttl>0);
     const si=seasonInfo(), h=getTerrainHeight(this.pos.x,this.pos.z), moist=moistureAt(this.pos.x,this.pos.z,h), fert=fertilityAt(this.pos.x,this.pos.z,h,moist);
-    this.handleDisease(dt,neighbors,fert); this.decide(neighbors,dayRatio,si); this.steerAndMove(dt,neighbors,si,h,fert); this.learn(dt); this.socialImitate(neighbors);
-    if(!experimentRunning){this.mesh.position.copy(this.pos); this.mesh.position.y+=.42*this.size; if(this.vel.lengthSq()>.04)this.mesh.lookAt(this.pos.clone().add(this.vel));
-    this.mesh.material.color.lerp(new THREE.Color(agentColor(this.type,this.genes,this.sick)),.08);
-    if(this.label)this.label.position.copy(this.mesh.position).add(new THREE.Vector3(0,1.2*this.size,0));
-    }
-    if(this.energy<=0||this.health<=0||this.age>(this.type==='prey'?11.5:13.5)){this.dead=true}
+    this.handleDisease(dt,neighbors,fert);
+    if(this.health<=0){this.dead=true;this.deathCause=this.sick?'disease':'injury';return}
+    if(this.handlingTimer>0||this.pendingMeal>0){
+      this.state='HANDLE';this.actionIdx=1;this.target=null;
+      const meal=EvoLab.consumeMeal(this.energy,this.pendingMeal,this.handlingTimer,dt);this.energy=meal.energy;this.pendingMeal=meal.pending;this.handlingTimer=meal.remaining;
+    }else this.decide(neighbors,dayRatio,si);
+    this.steerAndMove(dt,neighbors,si,h,fert);this.learn(dt);this.socialImitate(neighbors);
+    if(this.energy<=0||this.health<=0||this.age>(this.type==='prey'?11.5:13.5)){this.dead=true;this.deathCause=this.energy<=0?'starvation':this.health<=0?(this.sick?'disease':'injury'):'age'}
   }
   handleDisease(dt,neighbors,fert){
     const refuge=refugeAt(this.pos.x,this.pos.z).bonus, immune=(this.genes.immunity+this.immuneMemory*.45)*(1-refuge*.2);
@@ -215,25 +230,30 @@ class Agent{
       if(nearestPred&&dp<this.perception*(1.08-this.genes.boldness*.42)){this.state='FLEE';this.target=nearestPred.pos;this.actionIdx=2}
       else if(fear>.45&&this.energy>42){this.state='SHELTER';this.seekRefuge();this.actionIdx=2}
       else if(this.energy>88&&this.age>.25&&time-this.lastBirth>8&&nearestMate&&random()<.004*this.genes.policy[0]*phen){this.state='MATE';this.reproduce(nearestMate);this.actionIdx=0}
+      else if(settings.energyAware&&this.energy>108&&risk<.4){this.state='REST';this.target=null;this.actionIdx=3}
       else if((hungry||risk<.3)){this.state='FORAGE';this.findFood();this.actionIdx=1}
       else if((night||risk>.7)&&this.energy>62&&random()>.018){this.state='SHELTER';this.seekRefuge();this.actionIdx=2}
       else {this.state=random()<.24?'EXPLORE':'IDLE';this.target=null;this.actionIdx=3}
     }else{
       if(this.energy>96&&this.age>.35&&time-this.lastBirth>12&&nearestMate&&random()<.0027*phen){this.state='MATE';this.reproduce(nearestMate);this.actionIdx=0}
-      else if((hungry||this.genes.boldness>.75)&&nearestPrey&&dq<this.perception){this.state='HUNT';this.target=nearestPrey.pos;this.actionIdx=1;if(dq<1.55*this.size)this.attackPrey(nearestPrey)}
+      else if(settings.energyAware&&(this.energy>105||(this.state==='REST'&&this.energy>82))){this.state='REST';this.target=null;this.actionIdx=3}
+      else if((hungry||this.genes.boldness>.75)&&nearestPrey&&dq<this.perception){this.state='HUNT';this.target=nearestPrey.pos;this.actionIdx=1;if(dq<1.55*this.size&&this.attackCooldown<=0)this.attackPrey(nearestPrey)}
       else if(night&&this.energy>78){this.state='PATROL';this.target=null;this.actionIdx=3}
       else {this.state='FORAGE';this.target=null;this.actionIdx=3}
     }
     if(veryHungry&&(this.state==='SHELTER'||this.state==='SLEEP'))this.state='FORAGE';
   }
   attackPrey(prey){
-    if(prey.dead||prey.health<=0)return;
+    if(prey.dead||prey.health<=0||this.attackCooldown>0||this.handlingTimer>0)return;
     const defense=settings.defendedPrey?(prey.genes.defense||0):0, success=clamp(.78+this.genes.boldness*.16-defense*.55-prey.genes.speed*.05, .12, .94);
-    if(random()<success){const gain=62*(1-defense*.45); this.energy=clamp(this.energy+gain,0,135); if(defense>.55){this.health-=defense*8; this.energy-=defense*8} prey.health=0;prey.dead=true;pheromones.drop(this.pos,0xff516b); depositFear(prey.pos,.9,16); this.reward+=12; prey.reward-=10;}
-    else{this.energy-=7+defense*8;prey.energy-=3;prey.reward+=5;depositFear(prey.pos,.45,12);pheromones.drop(this.pos,0xffff80)}
+    this.attackCooldown=settings.energyAware?.85+defense*.4:0;
+    if(random()<success){const gain=62*(1-defense*.45);if(settings.energyAware){this.pendingMeal+=gain;this.handlingTimer=clamp(2.5*prey.size/Math.max(.5,this.genes.efficiency),1.5,5);this.state='HANDLE';this.target=null;}else this.energy=clamp(this.energy+gain,0,135);this.lastMealTime=time;recordCensus({kind:'kill',type:this.type,id:this.id}); if(defense>.55){this.health-=defense*8; this.energy-=defense*8} prey.health=0;prey.dead=true;prey.deathCause='predation';pheromones.drop(this.pos,0xff516b); depositFear(prey.pos,.9,16); this.reward+=12; prey.reward-=10;}
+    else{recordCensus({kind:'failedHunt',type:this.type,id:this.id});this.energy-=7+defense*8;prey.energy-=3;prey.reward+=5;depositFear(prey.pos,.45,12);pheromones.drop(this.pos,0xffff80)}
   }
   steerAndMove(dt,neighbors,si,h,fert){
-    if(this.state==='SHELTER'&&this.target&&this.pos.distanceTo(this.target)<2.5){this.vel.multiplyScalar(.35);this.energy=clamp(this.energy+dt*(2.7+refugeAt(this.pos.x,this.pos.z).bonus*3),0,112);return}
+    if(this.state==='SHELTER'&&this.target&&this.pos.distanceTo(this.target)<2.5)this.state='REST';
+    const resting=this.state==='REST'||this.state==='HANDLE';
+    this.maxSpeed=(this.type==='prey'?3.45:4.05)*this.genes.speed*(1-(this.type==='prey'&&settings.defendedPrey?this.genes.defense*.12:0));
     let steer=new THREE.Vector3(); const p=this.genes.policy;
     steer.add(this.separate(neighbors).multiplyScalar(1.35*p[2])); steer.add(this.align(neighbors).multiplyScalar((this.type==='prey'?.62:.25)*p[0]));
     if(this.state==='FLEE'&&this.target)steer.add(this.seek(this.target,-1).multiplyScalar(3.2*p[2]));
@@ -241,13 +261,15 @@ class Agent{
     else if((this.state==='FORAGE'||this.state==='SHELTER')&&this.target)steer.add(this.seek(this.target).multiplyScalar(1.15*p[1]));
     else if(this.state==='PATROL')steer.add(this.wander(dt).multiplyScalar(.65));
     else steer.add(this.wander(dt).multiplyScalar((this.state==='EXPLORE'?.9:.42)*p[3]));
-    steer.add(this.avoidBadTerrain().multiplyScalar(2)); if(this.type==='prey')steer.add(this.avoidFear().multiplyScalar(1.6)); steer.add(this.avoidFragmentation().multiplyScalar(1.8)); steer.add(this.avoidBoundaries().multiplyScalar(2.5)); steer.clampLength(0,this.maxForce); this.acc.add(steer);
+    steer.add(this.avoidBadTerrain().multiplyScalar(2)); if(this.type==='prey')steer.add(this.avoidFear().multiplyScalar(1.6)); steer.add(this.avoidFragmentation().multiplyScalar(1.8)); steer.add(this.avoidBoundaries().multiplyScalar(2.5)); if(resting){steer.set(0,0,0);this.vel.multiplyScalar(Math.exp(-dt*8))}steer.clampLength(0,this.maxForce); this.acc.add(steer);
     const tempCost=Math.abs(si.temp-.62)*dynamicClimateStress()/Math.max(.45,this.genes.thermal), sickness=this.sick?1.35:1, risk=habitatRisk(this.pos.x,this.pos.z,h), conn=habitatConnectivity(this.pos.x,this.pos.z);
-    this.vel.add(this.acc.multiplyScalar(dt)).clampLength(0,this.maxSpeed*(this.sick?.72:1)*(0.65+conn*.35)); this.pos.add(this.vel.clone().multiplyScalar(dt)); this.acc.set(0,0,0);
+    this.vel.add(this.acc.multiplyScalar(dt)).clampLength(0,this.maxSpeed*(this.sick?.72:1)*(0.65+conn*.35)); const next=this.pos.clone().addScaledVector(this.vel,dt),nextHeight=getTerrainHeight(next.x,next.z);
+    // Land animals cannot enter deep water; legacy submerged animals may move uphill to shore.
+    if((nextHeight>=-1.05&&nextHeight<=9.2)||(h<-1.05&&nextHeight>h))this.pos.copy(next);else this.vel.multiplyScalar(-.35);this.acc.set(0,0,0);
     this.pos.x=clamp(this.pos.x,-WORLD_SIZE/2+1,WORLD_SIZE/2-1);this.pos.z=clamp(this.pos.z,-WORLD_SIZE/2+1,WORLD_SIZE/2-1);
     const nh=getTerrainHeight(this.pos.x,this.pos.z); if(nh<-1.1){this.energy-=dt*11;this.vel.multiplyScalar(.52)} this.pos.y=Math.max(nh,-1.45);
     const defenseCost=this.type==='prey'&&settings.defendedPrey?(this.genes.defense||0)*.18:0;
-    const fearCost=this.type==='prey'?fearAt(this.pos.x,this.pos.z)*.10:0; const metabolic=(.72+this.size*this.size*.43+defenseCost)*(1+this.vel.length()*.23+tempCost+risk*.22+fearCost)*sickness/Math.max(.58,this.genes.efficiency||1); this.energy-=dt*metabolic;
+    const fearCost=this.type==='prey'?fearAt(this.pos.x,this.pos.z)*.10:0; const metabolic=(.72+this.size*this.size*.43+defenseCost)*(1+this.vel.length()*.23+tempCost+risk*.22+fearCost)*sickness/Math.max(.58,this.genes.efficiency||1); this.energy-=dt*metabolic*(resting?.42:1);
     if(settings.pheromones&&!experimentRunning&&visualRandom()<dt*(this.type==='prey'?.8:.45))pheromones.drop(this.pos,this.type==='prey'?0x5eff7e:0xff4f66);
   }
   learn(dt){
@@ -258,19 +280,30 @@ class Agent{
     let best=null,bestScore=-1,idx=-1; const memBoost=this.genes.memory;
     for(const j of plantGrid.query(this.pos.x,this.pos.z,this.perception)){const p=vegetation.data[j]; if(!p||!p.active)continue; const d=Math.sqrt(dist2(this.pos.x,this.pos.z,p.x,p.z)); if(d>this.perception*1.55)continue; const score=(p.energy*(.5+p.fertility)*p.nutrient)/(1+d)+refugeAt(p.x,p.z).bonus*2; if(score>bestScore){bestScore=score;best=p;idx=j}}
     for(const m of this.memory){const d=Math.sqrt(dist2(this.pos.x,this.pos.z,m.x,m.z)); const score=12*memBoost/(1+d); if(score>bestScore){bestScore=score;best=m;idx=-1}}
-    if(best){this.target=new THREE.Vector3(best.x,best.y??getTerrainHeight(best.x,best.z),best.z);this.targetIdx=idx; const d=this.pos.distanceTo(this.target); if(d<1.15&&idx>=0){const p=vegetation.data[idx]; if(p.active){this.energy=clamp(this.energy+p.energy,0,125);p.active=false;vegetation.active--;hidePlant(idx);this.rememberPatch(p);depositSoil(this.pos,.18,7);this.reward+=3}}} else this.target=null;
+    if(best){this.target=new THREE.Vector3(best.x,best.y??getTerrainHeight(best.x,best.z),best.z);this.targetIdx=idx; const d=this.pos.distanceTo(this.target); if(d<1.15&&idx>=0){const p=vegetation.data[idx]; if(p.active){this.energy=clamp(this.energy+p.energy,0,125);p.active=false;vegetation.active--;if(!experimentRunning)hidePlant(idx);this.lastMealTime=time;recordCensus({kind:'graze',type:this.type,id:this.id});this.rememberPatch(p);depositSoil(this.pos,.18,7);this.reward+=3}}} else this.target=null;
   }
   seekRefuge(){let best=null,bestD=1e9; for(const r of refugia){const d=dist2(this.pos.x,this.pos.z,r.x,r.z); if(d<bestD){bestD=d;best=r}} if(best)this.target=new THREE.Vector3(best.x,getTerrainHeight(best.x,best.z),best.z); else this.target=null}
   rememberPatch(p){this.memory.push({x:p.x+rnd(-5,5),z:p.z+rnd(-5,5),y:p.y,ttl:50}); if(this.memory.length>Math.round(4*this.genes.memory))this.memory.shift()}
   reproduce(mate=null){
     if(agents.length>=MAX_AGENTS||mate?.dead)return;
-    this.lastBirth=time; this.energy*=.56; if(mate){mate.energy*=.85;mate.lastBirth=time;} const childGenes=mixGenes(this.genes,mate?.genes); if(dynamicClimateStress()>.55){childGenes.thermal=clamp((childGenes.thermal||1)+.03,0,2.2);childGenes.plasticity=clamp((childGenes.plasticity||1)+.02,0,2.2)} const child=spawnAgent(this.type,this.pos.x+rnd(-1.8,1.8),this.pos.z+rnd(-1.8,1.8),childGenes,this); logEvent(`${this.type} ${this.eco} → ${child.eco} generation ${child.generation}`); pheromones.drop(this.pos,0xffff80); this.reward+=8;
+    const childGenes=mixGenes(this.genes,mate?.genes); if(dynamicClimateStress()>.55){childGenes.thermal=clamp((childGenes.thermal||1)+.03,0,2.2);childGenes.plasticity=clamp((childGenes.plasticity||1)+.02,0,2.2)} const child=spawnAgent(this.type,this.pos.x+rnd(-1.8,1.8),this.pos.z+rnd(-1.8,1.8),childGenes,this);if(!child)return;this.lastBirth=time;this.energy*=.56;if(mate){mate.energy*=.85;mate.lastBirth=time;} logEvent(`${this.type} ${this.eco} → ${child.eco} generation ${child.generation}`); pheromones.drop(this.pos,0xffff80); this.reward+=8;
   }
   seek(target,w=1){const desired=target.clone().sub(this.pos); desired.y=0; if(desired.lengthSq()===0)return desired; desired.normalize().multiplyScalar(this.maxSpeed); if(w<0)desired.negate(); return desired.sub(this.vel)}
-  wander(){return new THREE.Vector3(rnd(-1,1),0,rnd(-1,1)).multiplyScalar(48)}
+  wander(){const heading=Math.atan2(this.vel.z,this.vel.x)+rnd(-.65,.65),pace=rnd(.8,1.2)*this.maxSpeed;return new THREE.Vector3(Math.cos(heading)*pace,0,Math.sin(heading)*pace).sub(this.vel)}
   separate(neighbors){const sum=new THREE.Vector3();let c=0;for(const n of neighbors){if(n===this||n.dead)continue;const d=this.pos.distanceTo(n.pos);if(d>0&&d<2.25*this.size){sum.add(this.pos.clone().sub(n.pos).normalize().divideScalar(d));c++}} if(c)sum.divideScalar(c).normalize().multiplyScalar(this.maxSpeed);return sum.sub(this.vel)}
   align(neighbors){const sum=new THREE.Vector3();let c=0;for(const n of neighbors){if(!n.dead&&n!==this&&n.type===this.type&&this.pos.distanceTo(n.pos)<6){sum.add(n.vel);c++}} if(c)sum.divideScalar(c).normalize().multiplyScalar(this.maxSpeed);return sum.sub(this.vel)}
-  avoidBadTerrain(){const ahead=this.pos.clone().add(this.vel.clone().normalize().multiplyScalar(5)); const h=getTerrainHeight(ahead.x,ahead.z); if(h<-1||h>9.2)return this.pos.clone().sub(ahead).normalize().multiplyScalar(this.maxSpeed); return new THREE.Vector3()}
+  avoidBadTerrain(){
+    const direction=this.vel.clone().normalize(),ahead=this.pos.clone().addScaledVector(direction,4),h=getTerrainHeight(ahead.x,ahead.z),here=getTerrainHeight(this.pos.x,this.pos.z);
+    if(h>=-.85&&h<=8.8&&here>=-1.05)return new THREE.Vector3();
+    let best=null,score=-Infinity;
+    for(let i=0;i<12;i++){
+      const angle=i*Math.PI/6,dx=Math.cos(angle),dz=Math.sin(angle),height=getTerrainHeight(this.pos.x+dx*3,this.pos.z+dz*3);
+      const passable=height>=-.85&&height<=8.8;
+      const value=(passable?10:Math.min(height,0))+dx*direction.x+dz*direction.z;
+      if(value>score){score=value;best=new THREE.Vector3(dx,0,dz)}
+    }
+    return best.multiplyScalar(this.maxSpeed).sub(this.vel);
+  }
   avoidFear(){const ahead=this.pos.clone().add(this.vel.clone().normalize().multiplyScalar(5)); const f=fearAt(ahead.x,ahead.z); if(f>.25)return this.pos.clone().sub(ahead).normalize().multiplyScalar(this.maxSpeed*f); return new THREE.Vector3()}
   socialImitate(neighbors){if(!settings.socialLearning||random()>.018)return; let best=null; for(const n of neighbors){if(!n.dead&&n!==this&&n.type===this.type&&n.reward>this.reward+.8&&this.pos.distanceTo(n.pos)<7){best=n;break}} if(best){this.genes.policy=this.genes.policy.map((w,i)=>clamp(lerp(w,best.genes.policy[i],.035),.2,2.4)); this.reward+=.1}}
   avoidFragmentation(){const ahead=this.pos.clone().add(this.vel.clone().normalize().multiplyScalar(4)); const conn=habitatConnectivity(ahead.x,ahead.z); if(conn<.35)return this.pos.clone().sub(ahead).normalize().multiplyScalar(this.maxSpeed*(.5-conn)); return new THREE.Vector3()}
@@ -301,7 +334,7 @@ function simulationStep(){
   grid.clear(); for(const a of agents)if(!a.dead)grid.insert(a);
   const cohort=agents.slice();
   for(let i=cohort.length-1;i>=0;i--){const a=cohort[i];if(a.dead)continue;a.update(dt,grid.query(a.pos.x,a.pos.z,a.perception).filter(n=>!n.dead),(time%dayDuration)/dayDuration)}
-  agents=agents.filter(a=>{if(!a.dead)return true;if(followTarget===a)unfollow();depositSoil(a.pos,.35,8);a.dispose();return false});
+  agents=agents.filter(a=>{if(!a.dead)return true;recordCensus({kind:'death',type:a.type,id:a.id,founderId:a.founderId,cause:a.deathCause||(a.energy<=0?'starvation':a.sick?'disease':'injury')});if(followTarget===a&&!experimentRunning)unfollow();depositSoil(a.pos,.35,8);a.dispose();return false});
   regrowPlants(dt); climateAutoEvents(dt);
   if(simulationTick%60===0){rebuildPlantIndex();sampleHistory()}
 }
@@ -309,11 +342,15 @@ function sampleHistory(){
   const prey=agents.filter(a=>a.type==='prey'),pred=agents.filter(a=>a.type==='pred'),food=vegetation.active;
   stats.speciesCount=new Set(agents.map(a=>a.eco)).size; stats.diversity=diversityIndex(agents);
   stats.phenologyMismatch=1-(phenologyMatch('prey',seasonInfo())+phenologyMatch('pred',seasonInfo()))/2;
-  stats.history.push({day:time/dayDuration,prey:prey.length,pred:pred.length,food:food/20,div:stats.diversity*30,risk:earlyWarningScore()*60,climate:dynamicClimateStress(),phenology:stats.phenologyMismatch,soil:soilPulses.length,fear:fearPulses.length,edna:stats.edna.confidence||0,pathogenId:pathogen.id});
+  stats.history.push({day:time/dayDuration,prey:prey.length,pred:pred.length,food:food/20,div:stats.diversity*30,risk:earlyWarningScore()*60,climate:dynamicClimateStress(),phenology:stats.phenologyMismatch,soil:soilPulses.length,fear:fearPulses.length,edna:stats.edna.confidence||0,pathogenId:pathogen.id,preyEnergy:mean(prey,a=>a.energy),predEnergy:mean(pred,a=>a.energy),births:census.births.prey+census.births.pred,deaths:census.deaths.prey+census.deaths.pred});
   if(stats.history.length>600)stats.history.shift(); computeEarlyWarnings();
 }
 function advanceSimulation(seconds){const steps=Math.round(seconds/FIXED_DT);for(let i=0;i<steps;i++)simulationStep()}
+function syncAgentVisuals(){
+  for(const a of agents){a.mesh.position.copy(a.pos);a.mesh.position.y+=.42*a.size;if(a.vel.lengthSq()>.04)a.mesh.lookAt(a.pos.clone().add(a.vel));a.mesh.material.color.set(agentColor(a.type,a.genes,a.sick));if(a.label)a.label.position.copy(a.mesh.position).add(new THREE.Vector3(0,1.2*a.size))}
+}
 function renderFrame(dt){
+  syncAgentVisuals();
   updateDayNight(dt);if(water?.material.uniforms)water.material.uniforms.uTime.value=time;
   fireflies.update(paused?0:dt,isNight());weatherSystem.update(paused?0:dt);pheromones.update(paused?0:dt);
   updateCamera(dt);controls.update();renderer.render(scene,camera);
@@ -342,7 +379,7 @@ function updateUI(rawDt){
   document.getElementById('valSpeed').textContent=settings.speed.toFixed(1)+'x'; document.getElementById('valChaos').textContent=settings.chaos.toFixed(1); document.getElementById('valClimate').textContent=settings.climateStress.toFixed(2); document.getElementById('valTrend').textContent=settings.climateTrend.toFixed(2); document.getElementById('valMutation').textContent=settings.mutation.toFixed(3); document.getElementById('valDisease').textContent=settings.diseasePressure.toFixed(2); document.getElementById('valFragment').textContent=settings.fragmentation.toFixed(2); document.getElementById('valLearning').textContent=settings.learningRate.toFixed(2); document.getElementById('valPhenology').textContent=settings.phenologyDrift.toFixed(2); document.getElementById('valSensorNoise').textContent=settings.sensorNoise.toFixed(2); document.getElementById('valHorizon').textContent=settings.forecastHorizon+'s';
 
   document.getElementById('cntSpecies').textContent=new Set(agents.map(a=>a.eco)).size;document.getElementById('ewsLabel').textContent=stats.ews;updateRunStatus();
-  drawGraph(); drawMinimap(); updateInspector(); updateResearch(prey,pred); updateSentinelPanel(); updateForecastPanel();
+  drawPopulationHistory();updateObservatory(); drawMinimap(); updateInspector(); updateResearch(prey,pred); updateSentinelPanel(); updateForecastPanel();
 }
 function diversityIndex(list){if(!list.length)return 0; const counts={}; for(const a of list)counts[a.eco]=(counts[a.eco]||0)+1; let sum=0; for(const k in counts){const p=counts[k]/list.length;sum-=p*Math.log(p)} return sum/Math.log(Math.max(2,Object.keys(counts).length+1))}
 function autocorr1(arr){if(arr.length<4)return 0; const m=mean(arr,x=>x), num=arr.slice(1).reduce((s,v,i)=>s+(arr[i]-m)*(v-m),0), den=arr.reduce((s,v)=>s+(v-m)*(v-m),0); return den?num/den:0}
@@ -351,7 +388,7 @@ function computeEarlyWarnings(){const recent=stats.history.slice(-54).map(p=>p.p
 function earlyWarningScore(){const recent=stats.history.slice(-54).map(p=>p.prey+p.pred*.8+p.food*.12); if(recent.length<10)return 0; const ac=clamp((autocorr1(recent)+.2)/1.2,0,1), va=clamp(variance(recent)/900,0,1), low=agents.filter(a=>a.type==='prey').length<14?.3:0, stress=dynamicClimateStress()*.18; return clamp(ac*.42+va*.28+low+stress,0,1)}
 function updateResearch(prey,pred){document.getElementById('divIndex').textContent=stats.diversity.toFixed(2); document.getElementById('meanPreySpeed').textContent=mean(prey,a=>a.genes.speed).toFixed(2); document.getElementById('meanPreyDefense').textContent=mean(prey,a=>a.genes.defense||0).toFixed(2); document.getElementById('meanPredSense').textContent=mean(pred,a=>a.genes.sense).toFixed(2); document.getElementById('meanThermal').textContent=mean(agents,a=>a.genes.thermal||1).toFixed(2)+' / '+mean(agents,a=>a.genes.plasticity||1).toFixed(2); document.getElementById('fieldStats').textContent=fearPulses.length+' / '+soilPulses.length; document.getElementById('resilienceStats').textContent=stats.ac1.toFixed(2)+' / '+stats.variance.toFixed(2); const risk=prey.length<8||pred.length<1||stats.ews==='High'?'High':(prey.length<18||pred.length>prey.length*.45||stats.ews==='Watch'?'Medium':'Low'); document.getElementById('riskLabel').textContent=risk; document.getElementById('riskLabel').style.color=risk==='High'?'var(--bad)':risk==='Medium'?'var(--warn)':'var(--ok)'; document.getElementById('pathogenLabel').textContent=`v${pathogen.id} μ${pathogen.virulence.toFixed(2)} τ${pathogen.transmission.toFixed(2)}`; document.getElementById('lineageList').textContent=stats.events.join('\n')||'No events yet.'; drawTraitGraph(prey,pred)}
 function mean(arr,fn){return arr.length?arr.reduce((s,a)=>s+fn(a),0)/arr.length:0}
-function updateInspector(){if(!followTarget)return; const a=followTarget; if(a.dead){unfollow();return} document.getElementById('selType').textContent=a.type.toUpperCase(); document.getElementById('selType').className=a.type==='prey'?'c-prey':'c-pred'; document.getElementById('selId').textContent='#'+a.id; document.getElementById('selState').textContent=a.state+(a.sick?' / SICK':''); document.getElementById('selEnergy').style.width=clamp(a.energy,0,100)+'%'; document.getElementById('selHealth').style.width=clamp(a.health,0,100)+'%'; document.getElementById('selHealth').style.background=a.sick?'linear-gradient(90deg,#9c6cff,#ff80df)':'linear-gradient(90deg,var(--ok),#d6ff6d)'; document.getElementById('selAge').textContent=a.age.toFixed(1)+'d / '+a.generation; document.getElementById('selEco').textContent=a.eco; document.getElementById('selReward').textContent=a.reward.toFixed(2); document.getElementById('geneSize').textContent=a.genes.size.toFixed(2); document.getElementById('geneSpeed').textContent=a.genes.speed.toFixed(2); document.getElementById('geneSense').textContent=a.genes.sense.toFixed(2); document.getElementById('geneImmune').textContent=a.genes.immunity.toFixed(2); document.getElementById('geneThermal').textContent=(a.genes.thermal||1).toFixed(2); document.getElementById('geneDefense').textContent=(a.genes.defense||0).toFixed(2); document.getElementById('genePlasticity').textContent=(a.genes.plasticity||1).toFixed(2); document.getElementById('genePolicy').textContent=policyName(a.genes); drawPolicyCanvas(a)}
+function updateInspector(){if(!followTarget)return; const a=followTarget; if(a.dead){unfollow();return} document.getElementById('selType').textContent=a.type.toUpperCase(); document.getElementById('selType').className=a.type==='prey'?'c-prey':'c-pred'; document.getElementById('selId').textContent='#'+a.id; document.getElementById('selState').textContent=a.state+(a.sick?' / SICK':''); document.getElementById('selEnergy').style.width=clamp(a.energy,0,100)+'%'; document.getElementById('selHealth').style.width=clamp(a.health,0,100)+'%'; document.getElementById('selHealth').style.background=a.sick?'linear-gradient(90deg,#9c6cff,#ff80df)':'linear-gradient(90deg,var(--ok),#d6ff6d)'; document.getElementById('selAge').textContent=a.age.toFixed(1)+'d / '+a.generation; document.getElementById('selEco').textContent=a.eco; document.getElementById('selReward').textContent=a.reward.toFixed(2);document.getElementById('selFounder').textContent='#'+a.founderId;document.getElementById('selFeeding').textContent=a.handlingTimer>0?a.handlingTimer.toFixed(1)+'s handling':a.lastMealTime>0?Math.max(0,time-a.lastMealTime).toFixed(1)+'s since meal':'No meal recorded'; document.getElementById('geneSize').textContent=a.genes.size.toFixed(2); document.getElementById('geneSpeed').textContent=a.genes.speed.toFixed(2); document.getElementById('geneSense').textContent=a.genes.sense.toFixed(2); document.getElementById('geneImmune').textContent=a.genes.immunity.toFixed(2); document.getElementById('geneThermal').textContent=(a.genes.thermal||1).toFixed(2); document.getElementById('geneDefense').textContent=(a.genes.defense||0).toFixed(2); document.getElementById('genePlasticity').textContent=(a.genes.plasticity||1).toFixed(2); document.getElementById('genePolicy').textContent=policyName(a.genes); drawPolicyCanvas(a)}
 function drawGraph(){const ctx=document.getElementById('graph').getContext('2d'),w=252,h=76;ctx.clearRect(0,0,w,h);ctx.fillStyle='rgba(0,0,0,.25)';ctx.fillRect(0,0,w,h);drawLine(ctx,stats.history.map(p=>p.prey),w,h,'#6dff7d',125);drawLine(ctx,stats.history.map(p=>p.pred),w,h,'#ff5e72',85);drawLine(ctx,stats.history.map(p=>p.food),w,h,'#ffc04d',165);drawLine(ctx,stats.history.map(p=>p.div),w,h,'#e0fb7a',60);drawLine(ctx,stats.history.map(p=>p.risk),w,h,'#ff9a9a',80)}
 function drawLine(ctx,arr,w,h,col,max){ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=1.7;arr.forEach((v,i)=>{const x=i/Math.max(1,arr.length-1)*w,y=h-clamp(v/max,0,1)*h;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y)});ctx.stroke()}
 function drawTraitGraph(prey,pred){const ctx=document.getElementById('traitGraph').getContext('2d'),w=304,h=78;ctx.clearRect(0,0,w,h);ctx.fillStyle='rgba(0,0,0,.23)';ctx.fillRect(0,0,w,h);const traits=[['speed',mean(prey,a=>a.genes.speed),mean(pred,a=>a.genes.speed),'#6dff7d'],['sense',mean(prey,a=>a.genes.sense),mean(pred,a=>a.genes.sense),'#7fd8ff'],['immune',mean(prey,a=>a.genes.immunity),mean(pred,a=>a.genes.immunity),'#d4a3ff'],['def',mean(prey,a=>a.genes.defense||0),0,'#e0fb7a']];ctx.font='10px Segoe UI';traits.forEach((t,i)=>{const x=14+i*72;ctx.fillStyle='rgba(255,255,255,.11)';ctx.fillRect(x,10,22,h-24);ctx.fillStyle=t[3];ctx.fillRect(x,h-14-clamp(t[1]/1.6,0,1)*(h-28),9,clamp(t[1]/1.6,0,1)*(h-28));ctx.fillStyle='#ff5e72';ctx.fillRect(x+11,h-14-clamp(t[2]/1.6,0,1)*(h-28),9,clamp(t[2]/1.6,0,1)*(h-28));ctx.fillStyle='#cbd5e1';ctx.fillText(t[0],x-4,h-2)})}
@@ -386,10 +423,14 @@ function setupUI(){
   by('btnPause').onclick=()=>setPaused(!paused); by('btnUnfollow').onclick=unfollow; by('btnResearch').onclick=()=>{const p=by('researchPanel');p.style.display=getComputedStyle(p).display==='none'?'block':'none'}; by('btnScenario').onclick=()=>{const p=by('scenarioPanel');p.style.display=getComputedStyle(p).display==='none'?'block':'none';updateODDNotes()}; by('btnSentinel').onclick=()=>{const p=by('sentinelPanel');p.style.display=getComputedStyle(p).display==='none'?'block':'none';updateSentinelPanel()}; by('btnForecast').onclick=()=>{const p=by('forecastPanel');p.style.display=getComputedStyle(p).display==='none'?'block':'none';updateForecastPanel()};
   by('btnSave').onclick=saveState; by('btnLoad').onclick=loadState; by('btnExport').onclick=exportCSV; by('btnExportJSON').onclick=exportJSON;
   by('chkPheromones').onchange=e=>settings.pheromones=e.target.checked; by('chkShadows').onchange=e=>renderer.shadowMap.enabled=settings.shadows=e.target.checked; by('chkParticles').onchange=e=>settings.particles=e.target.checked; by('chkHeatmap').onchange=e=>{settings.heatmap=e.target.checked;if(heatmapMesh)heatmapMesh.visible=settings.heatmap}; by('chkRiskMap').onchange=e=>settings.riskMap=e.target.checked; by('chkLineage').onchange=e=>settings.lineage=e.target.checked; by('chkQuality').onchange=e=>{settings.quality=e.target.checked;renderer.setPixelRatio(settings.quality?Math.min(devicePixelRatio,2):1)}; by('cameraMode').onchange=e=>settings.cameraMode=e.target.value;
-  by('chkLearning').onchange=e=>settings.adaptiveLearning=e.target.checked; by('chkCarrying').onchange=e=>settings.carryingCapacity=e.target.checked; by('chkDefense').onchange=e=>settings.defendedPrey=e.target.checked; by('chkAutoEvents').onchange=e=>settings.autoEvents=e.target.checked; by('chkFear').onchange=e=>settings.fearLandscape=e.target.checked; by('chkNiche').onchange=e=>settings.nicheConstruction=e.target.checked; by('chkSocial').onchange=e=>settings.socialLearning=e.target.checked; by('chkSensors').onchange=e=>settings.ednaSensors=e.target.checked;
+  by('chkLearning').onchange=e=>settings.adaptiveLearning=e.target.checked; by('chkCarrying').onchange=e=>settings.carryingCapacity=e.target.checked; by('chkDefense').onchange=e=>settings.defendedPrey=e.target.checked; by('chkAutoEvents').onchange=e=>settings.autoEvents=e.target.checked; by('chkFear').onchange=e=>settings.fearLandscape=e.target.checked; by('chkNiche').onchange=e=>settings.nicheConstruction=e.target.checked; by('chkSocial').onchange=e=>settings.socialLearning=e.target.checked; by('chkSensors').onchange=e=>settings.ednaSensors=e.target.checked;by('chkEnergyAware').onchange=e=>settings.energyAware=e.target.checked;by('chkLocalRegrowth').onchange=e=>settings.localRegrowth=e.target.checked;
 }
-function syncUI(){const by=id=>document.getElementById(id);by('runSeed').value=runSeed;by('chkShadows').checked=settings.shadows;by('chkQuality').checked=settings.quality;renderer.shadowMap.enabled=settings.shadows;renderer.setPixelRatio(settings.quality?Math.min(devicePixelRatio,2):1); by('simSpeed').value=settings.speed; by('terrChaos').value=settings.chaos; by('climateStress').value=settings.climateStress; by('climateTrend').value=settings.climateTrend; by('mutationRate').value=settings.mutation; by('diseasePressure').value=settings.diseasePressure; by('fragmentation').value=settings.fragmentation; by('learningRate').value=settings.learningRate; by('phenologyDrift').value=settings.phenologyDrift; by('sensorNoise').value=settings.sensorNoise; by('forecastHorizon').value=settings.forecastHorizon; by('chkPheromones').checked=settings.pheromones; by('chkParticles').checked=settings.particles; by('chkHeatmap').checked=settings.heatmap; by('chkRiskMap').checked=settings.riskMap; by('chkLineage').checked=settings.lineage; by('cameraMode').value=settings.cameraMode; by('chkLearning').checked=settings.adaptiveLearning; by('chkCarrying').checked=settings.carryingCapacity; by('chkDefense').checked=settings.defendedPrey; by('chkAutoEvents').checked=settings.autoEvents; by('chkFear').checked=settings.fearLandscape; by('chkNiche').checked=settings.nicheConstruction; by('chkSocial').checked=settings.socialLearning; by('chkSensors').checked=settings.ednaSensors}
-function exportCSV(){let csv='day,prey,predators,plants,diversity,early_warning,climate_stress,pathogen_id\n'; stats.history.forEach(p=>csv+=`${p.day.toFixed(2)},${p.prey},${p.pred},${Math.round(p.food*20)},${(p.div/30).toFixed(3)},${(p.risk/60).toFixed(3)},${p.climate.toFixed(3)},${p.pathogenId}\n`); downloadBlob(csv,'evosim6-history.csv','text/csv');notify('CSV exported')}
+function syncUI(){const by=id=>document.getElementById(id);by('runSeed').value=runSeed;by('chkShadows').checked=settings.shadows;by('chkQuality').checked=settings.quality;renderer.shadowMap.enabled=settings.shadows;renderer.setPixelRatio(settings.quality?Math.min(devicePixelRatio,2):1); by('simSpeed').value=settings.speed; by('terrChaos').value=settings.chaos; by('climateStress').value=settings.climateStress; by('climateTrend').value=settings.climateTrend; by('mutationRate').value=settings.mutation; by('diseasePressure').value=settings.diseasePressure; by('fragmentation').value=settings.fragmentation; by('learningRate').value=settings.learningRate; by('phenologyDrift').value=settings.phenologyDrift; by('sensorNoise').value=settings.sensorNoise; by('forecastHorizon').value=settings.forecastHorizon; by('chkPheromones').checked=settings.pheromones; by('chkParticles').checked=settings.particles; by('chkHeatmap').checked=settings.heatmap; by('chkRiskMap').checked=settings.riskMap; by('chkLineage').checked=settings.lineage; by('cameraMode').value=settings.cameraMode; by('chkLearning').checked=settings.adaptiveLearning; by('chkCarrying').checked=settings.carryingCapacity; by('chkDefense').checked=settings.defendedPrey; by('chkAutoEvents').checked=settings.autoEvents; by('chkFear').checked=settings.fearLandscape; by('chkNiche').checked=settings.nicheConstruction; by('chkSocial').checked=settings.socialLearning; by('chkSensors').checked=settings.ednaSensors;by('chkEnergyAware').checked=settings.energyAware;by('chkLocalRegrowth').checked=settings.localRegrowth}
+function exportCSV(){
+  const header=['day','prey','predators','plants','diversity','early_warning','climate_stress','pathogen_id','prey_mean_energy','predator_mean_energy','births','deaths'];
+  const rows=stats.history.map(p=>[p.day,p.prey,p.pred,Math.round(p.food*20),p.div/30,p.risk/60,p.climate,p.pathogenId,p.preyEnergy??'',p.predEnergy??'',p.births??'',p.deaths??'']);
+  downloadBlob([header,...rows].map(row=>row.join(',')).join('\n'),'evosim6.1-history.csv','text/csv');notify('History CSV exported');
+}
 function downloadBlob(data,name,type){const blob=new Blob([data],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function updateODDNotes(){document.getElementById('oddNotes').innerHTML=`
   <strong>Purpose:</strong> explore qualitative eco-evolutionary responses to climate, fragmentation, disease and management interventions.<br><br>
@@ -404,3 +445,8 @@ function updateODDNotes(){document.getElementById('oddNotes').innerHTML=`
 
 function shuffleSample(list,count){const copy=list.slice();for(let i=copy.length-1;i>0;i--){const j=Math.floor(random()*(i+1));[copy[i],copy[j]]=[copy[j],copy[i]]}return copy.slice(0,count)}
 function refreshHabitat(){if(experimentRunning)return;if(heatmapMesh){scene.remove(heatmapMesh);heatmapMesh.geometry.dispose();heatmapMesh.material.dispose()}buildHeatmap();makeMiniTerrainCache();drawRefugia()}
+
+function recordCensus(event){
+  EvoObservatory.record(census,event);
+  if(['birth','introduction','death'].includes(event.kind)){censusEvents.unshift({tick:simulationTick,...event});if(censusEvents.length>80)censusEvents.pop()}
+}
